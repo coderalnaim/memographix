@@ -8,6 +8,7 @@ from typing import Any
 from .agent import SUPPORTED_AGENTS, install_agent_rules
 from .config import ensure_repo_config, load_repo_control, update_repo_control
 from .engine import IndexStats, LocalEngine
+from .integrations import install_mcp_integrations, integration_status
 from .models import ContextPacket, TaskMemory
 
 
@@ -19,7 +20,7 @@ class Workspace:
         self.engine = LocalEngine(self.root)
 
     @classmethod
-    def open(cls, root: str | Path = ".") -> "Workspace":
+    def open(cls, root: str | Path = ".") -> Workspace:
         return cls(root)
 
     def init(self) -> Path:
@@ -31,28 +32,33 @@ class Workspace:
     def setup(self, agents: str = "all") -> dict[str, Any]:
         self.init()
         now = _utc_now()
+        selected_agents = _parse_agents(agents)
         config_path, config_written = ensure_repo_config(
             self.root,
             {
                 "enabled": True,
                 "setup_completed": True,
+                "setup_agents": ",".join(selected_agents),
                 "disabled_reason": "",
                 "last_enabled_at": now,
             },
         )
         stats = self.index()
-        selected_agents = _parse_agents(agents)
         installed = []
         for agent in selected_agents:
             path = install_agent_rules(self.root, agent)
             installed.append({"agent": agent, "path": str(path)})
         mcp_config = self._write_mcp_config()
+        integrations = install_mcp_integrations(self.root, selected_agents)
+        codex_mcp = next((item for item in integrations if item["agent"] == "codex"), None)
         return {
             "root": str(self.root),
             "db": str(self.engine.db_path),
             "config": str(config_path),
             "config_written": config_written,
             "mcp_config": str(mcp_config),
+            "integrations": integrations,
+            "codex_mcp": codex_mcp,
             "agents": installed,
             "index": stats.to_dict(),
             "status": self.status(),
@@ -121,7 +127,9 @@ class Workspace:
         evidence: list[str] | None = None,
         validation: dict[str, Any] | None = None,
     ) -> int:
-        return self.engine.remember(question, answer, evidence_paths=evidence, validation=validation)
+        return self.engine.remember(
+            question, answer, evidence_paths=evidence, validation=validation
+        )
 
     def capture(
         self,
@@ -167,12 +175,18 @@ class Workspace:
         stats = self.stats() if db_exists else {"files": 0, "symbols": 0, "edges": 0, "tasks": 0}
         last_indexed_at = self.engine.last_indexed_at() if db_exists else ""
         stale_count = len(self.changed()) if db_exists else 0
+        integrations = integration_status(self.root)
+        codex_mcp = next((item for item in integrations if item["agent"] == "codex"), None)
+        setup_agents = control.setup_agents or (
+            tuple(SUPPORTED_AGENTS) if control.configured and control.setup_completed else ()
+        )
         agents = []
         for agent in SUPPORTED_AGENTS:
             path = _agent_rule_path(self.root, agent)
             agents.append(
                 {
                     "agent": agent,
+                    "selected": agent in setup_agents,
                     "rules_installed": path.exists(),
                     "path": str(path),
                 }
@@ -181,6 +195,7 @@ class Workspace:
             "root": str(self.root),
             "configured": control.configured,
             "setup_completed": control.setup_completed,
+            "setup_agents": list(setup_agents),
             "enabled": control.configured and control.setup_completed and control.enabled,
             "reason": control.disabled_status,
             "disabled_reason": control.disabled_reason,
@@ -189,6 +204,9 @@ class Workspace:
             "config": str(control.config_path),
             "db_exists": db_exists,
             "mcp_config_exists": (self.root / ".memographix" / "mcp.json").exists(),
+            "integrations": integrations,
+            "codex_mcp_registered": bool(codex_mcp and codex_mcp["registered"]),
+            "codex_mcp_config": codex_mcp["path"] if codex_mcp else "",
             "last_indexed_at": last_indexed_at,
             "stale_count": stale_count,
             "stats": stats,
@@ -198,7 +216,9 @@ class Workspace:
     def automatic_context(self, question: str, budget: int = 800) -> dict[str, Any]:
         status = self.status()
         if not status["configured"] or not status["setup_completed"]:
-            return _disabled_response(question, budget, status["reason"] or "repo not configured", status)
+            return _disabled_response(
+                question, budget, status["reason"] or "repo not configured", status
+            )
         if not status["enabled"]:
             return _disabled_response(question, budget, status["reason"] or "repo disabled", status)
         packet = self.context(question, budget=budget, refresh=True, record_event=True)
@@ -220,23 +240,34 @@ class Workspace:
         except ImportError:
             mcp_package = False
         status = self.status()
+        selected_agents = set(status["setup_agents"])
+        mcp_integrations = [
+            item
+            for item in status["integrations"]
+            if item["mode"] == "mcp" and item["agent"] in selected_agents
+        ]
         return {
             "root": str(self.root),
             "db_exists": status["db_exists"],
             "config_exists": status["configured"],
             "configured": status["configured"],
             "setup_completed": status["setup_completed"],
+            "setup_agents": status["setup_agents"],
             "enabled": status["enabled"],
             "disabled_reason": status["disabled_reason"],
             "status_reason": status["reason"],
             "mcp_config_exists": status["mcp_config_exists"],
+            "codex_mcp_registered": status["codex_mcp_registered"],
+            "codex_mcp_config": status["codex_mcp_config"],
             "mcp_package_installed": mcp_package,
             "native_index_available": native_available,
             "last_indexed_at": status["last_indexed_at"],
             "stale_count": status["stale_count"],
             "stats": status["stats"],
             "agents": status["agents"],
-            "manual_mcp_config_required": not mcp_package,
+            "integrations": status["integrations"],
+            "mcp_runtime_required": not mcp_package,
+            "manual_mcp_config_required": any(not item["ready"] for item in mcp_integrations),
         }
 
     def export_json(self) -> dict:

@@ -18,10 +18,32 @@ Run setup once per repo:
 mgx setup
 ```
 
-Setup writes `.memographix/mcp.json` and installs project rules for Codex,
-Claude, Cursor, Copilot, Gemini, OpenCode, Aider, and Windsurf-style agents.
+Setup writes `.memographix/mcp.json`, configures supported MCP clients, and
+installs project rules for Codex, Claude, Cursor, Copilot, Gemini, OpenCode,
+Aider, and Windsurf-style agents. Restart already-open agents after setup so
+they reload MCP tools.
 The old `pip install "memographix[mcp]"` form remains accepted for backward
 compatibility, but it is no longer required.
+
+## Configured Files
+
+`mgx setup` writes the native MCP config where the client has a stable local
+configuration file:
+
+| Agent | Config written by setup |
+| --- | --- |
+| Codex | `~/.codex/config.toml` |
+| Claude Code | `.mcp.json` |
+| Cursor | `.cursor/mcp.json` |
+| GitHub Copilot in VS Code | `.vscode/mcp.json` |
+| Gemini CLI | `.gemini/settings.json` |
+| OpenCode | `opencode.json` |
+| Windsurf | `~/.codeium/mcp_config.json` |
+| Aider | project rules fallback |
+
+Run `mgx doctor` to see which integrations are ready for the current repo.
+Aider does not currently have a stable native MCP config path in Memographix, so
+setup installs project rules and the CLI fallback for it.
 
 ## Expected Agent Behavior
 

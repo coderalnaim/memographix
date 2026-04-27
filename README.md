@@ -18,8 +18,8 @@ mgx savings
 
 `pipx` avoids system Python conflicts on macOS and Linux. The PyPI package
 includes the CLI, local indexer, MCP server, and agent integration support.
-`mgx setup` creates `.memographix/`, indexes the repo, writes an MCP server
-config, and installs project agent rules.
+`mgx setup` creates `.memographix/`, indexes the repo, writes MCP config for
+supported agents, and installs project agent rules.
 
 If you are already inside a virtual environment or CI job, this also works:
 
@@ -48,8 +48,8 @@ Check setup health:
 mgx doctor
 ```
 
-If `mgx doctor` says an agent needs manual MCP configuration, use the generated
-file at `.memographix/mcp.json` in that agent's MCP settings.
+`mgx doctor` reports each integration separately. Restart agents after setup if
+they were already open so they reload MCP tools.
 
 Control it per repo:
 

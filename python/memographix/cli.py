@@ -73,7 +73,10 @@ def main(argv: list[str] | None = None) -> None:
     serve_cmd.add_argument("--jsonl", action="store_true", help="force JSONL fallback server")
 
     agent = sub.add_parser("install-agent", help="install per-agent memory instructions")
-    agent.add_argument("agent", choices=["codex", "claude", "cursor", "copilot", "gemini", "opencode", "aider", "windsurf"])
+    agent.add_argument(
+        "agent",
+        choices=["codex", "claude", "cursor", "copilot", "gemini", "opencode", "aider", "windsurf"],
+    )
 
     bench = sub.add_parser("bench", help="run sandboxed benchmark")
     bench.add_argument("corpus", type=Path)
@@ -99,6 +102,12 @@ def main(argv: list[str] | None = None) -> None:
                 f"{result['index']['edges']} edges in {result['index']['duration_ms']}ms"
             )
             print(f"MCP config: {result['mcp_config']}")
+            ready = [item for item in result["integrations"] if item["ready"]]
+            print(f"MCP integrations ready: {len(ready)}/{len(result['integrations'])}")
+            for item in result["integrations"]:
+                status = "ready" if item["ready"] else "needs review"
+                detail = f" ({item['reason']})" if item["reason"] else ""
+                print(f"- {item['agent']}: {status} via {item['path']}{detail}")
             print("Agent rules installed:")
             for item in result["agents"]:
                 print(f"- {item['agent']}: {item['path']}")
@@ -135,6 +144,8 @@ def main(argv: list[str] | None = None) -> None:
             print(f"last_indexed_at: {result['last_indexed_at'] or '-'}")
             print(f"stale_count: {result['stale_count']}")
             print(f"stats: {json.dumps(result['stats'], sort_keys=True)}")
+            ready = [item for item in result["integrations"] if item["ready"]]
+            print(f"mcp_integrations_ready: {len(ready)}/{len(result['integrations'])}")
     elif args.cmd == "init":
         print(f"Initialized {ws.init()}")
     elif args.cmd == "index":
@@ -192,11 +203,19 @@ def main(argv: list[str] | None = None) -> None:
             print(f"db_exists: {result['db_exists']}")
             print(f"config_exists: {result['config_exists']}")
             print(f"mcp_package_installed: {result['mcp_package_installed']}")
+            if result["mcp_runtime_required"]:
+                print("mcp_runtime_required: install or upgrade memographix from PyPI")
             print(f"native_index_available: {result['native_index_available']}")
             print(f"enabled: {result['enabled']}")
+            ready = [item for item in result["integrations"] if item["ready"]]
+            print(f"mcp_integrations_ready: {len(ready)}/{len(result['integrations'])}")
             if result["status_reason"]:
                 print(f"status_reason: {result['status_reason']}")
             print(f"stats: {json.dumps(result['stats'], sort_keys=True)}")
+            for item in result["integrations"]:
+                status = "ready" if item["ready"] else "needs review"
+                detail = f" ({item['reason']})" if item["reason"] else ""
+                print(f"- {item['agent']}: {status} via {item['path']}{detail}")
             missing = [a["agent"] for a in result["agents"] if not a["rules_installed"]]
             if missing:
                 print(f"agent_rules_missing: {', '.join(missing)}")

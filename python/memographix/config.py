@@ -91,6 +91,7 @@ class RepoControl:
     configured: bool
     setup_completed: bool
     enabled: bool
+    setup_agents: tuple[str, ...] = ()
     disabled_reason: str = ""
     last_enabled_at: str = ""
     last_disabled_at: str = ""
@@ -143,6 +144,7 @@ def load_repo_control(root: Path) -> RepoControl:
             configured=False,
             setup_completed=False,
             enabled=False,
+            setup_agents=(),
             disabled_reason="repo not configured",
         )
     data = _load_toml(config_path)
@@ -151,6 +153,7 @@ def load_repo_control(root: Path) -> RepoControl:
         configured=True,
         setup_completed=_as_bool(data.get("setup_completed", True)),
         enabled=_as_bool(data.get("enabled", True)),
+        setup_agents=_parse_setup_agents(data.get("setup_agents", "")),
         disabled_reason=str(data.get("disabled_reason", "")),
         last_enabled_at=str(data.get("last_enabled_at", "")),
         last_disabled_at=str(data.get("last_disabled_at", "")),
@@ -187,6 +190,14 @@ def _as_bool(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
     return bool(value)
+
+
+def _parse_setup_agents(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return tuple(agent.strip().lower() for agent in value.split(",") if agent.strip())
+    if isinstance(value, list):
+        return tuple(str(agent).strip().lower() for agent in value if str(agent).strip())
+    return ()
 
 
 def _toml_literal(value: Any) -> str:
