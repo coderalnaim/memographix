@@ -16,11 +16,20 @@ def tool_resolve_task(
     token_budget: int = 800,
     repo: str | None = None,
     dry_run: bool = False,
+    verification_id: str = "",
+    agent: str = "",
 ) -> dict[str, Any]:
     workspace, error, resolution = _workspace_for(root, repo=repo, hint=question)
     if error:
         return _resolve_error(question, token_budget, error)
-    data = workspace.automatic_context(question, budget=token_budget, dry_run=dry_run, source="mcp")
+    data = workspace.automatic_context(
+        question,
+        budget=token_budget,
+        dry_run=dry_run,
+        source="mcp",
+        verification_id=verification_id,
+        agent=agent,
+    )
     data["repo_root"] = str(workspace.root)
     data["matched_by"] = resolution.matched_by
     return data
@@ -38,6 +47,8 @@ def tool_capture_task(
     validation: dict[str, Any] | None = None,
     repo: str | None = None,
     resolve_event_id: int | None = None,
+    verification_id: str = "",
+    agent: str = "",
 ) -> dict[str, Any]:
     commands = commands or []
     tests = tests or []
@@ -53,6 +64,7 @@ def tool_capture_task(
             "reason": error["reason"],
             "evidence": [],
             "candidates": error.get("candidates", []),
+            "final_status_line": f"Memographix: not saved - {error['reason']}",
         }
     return workspace.capture(
         question=question,
@@ -64,6 +76,8 @@ def tool_capture_task(
         outcome=outcome,
         resolve_event_id=resolve_event_id,
         source="mcp",
+        verification_id=verification_id,
+        agent=agent,
     )
 
 
@@ -110,18 +124,25 @@ def tool_activation_status(root: str, repo: str | None = None) -> dict[str, Any]
         }
     status = workspace.status()
     savings = workspace.savings()
+    verification = workspace.engine.verification_status()
     return {
         "resolved": True,
         "repo_root": str(workspace.root),
         "matched_by": resolution.matched_by,
         "enabled": status["enabled"],
+        "strict_mode": status["strict_mode"],
         "configured": status["configured"],
         "setup_completed": status["setup_completed"],
         "stats": status["stats"],
         "last_resolve_at": savings.get("last_resolve_at", ""),
         "last_capture_at": savings.get("last_capture_at", ""),
+        "last_capture_status": savings.get("last_capture_status", ""),
         "last_mcp_call_at": savings.get("last_mcp_call_at", ""),
         "last_tool_source": savings.get("last_tool_source", ""),
+        "agent_verified": verification.get("agent_verified", False),
+        "last_verified_agent_at": verification.get("last_verified_agent_at", ""),
+        "last_verified_agent": verification.get("last_verified_agent", ""),
+        "last_unverified_warning": verification.get("last_unverified_warning", ""),
     }
 
 
@@ -151,6 +172,8 @@ def serve(root: str = ".") -> None:
                         "token_budget": {"type": "integer", "default": 800},
                         "repo": {"type": "string"},
                         "dry_run": {"type": "boolean", "default": False},
+                        "verification_id": {"type": "string"},
+                        "agent": {"type": "string"},
                     },
                     "required": ["question"],
                 },
@@ -173,6 +196,8 @@ def serve(root: str = ".") -> None:
                         "validation": {"type": "object"},
                         "repo": {"type": "string"},
                         "resolve_event_id": {"type": "integer"},
+                        "verification_id": {"type": "string"},
+                        "agent": {"type": "string"},
                     },
                     "required": ["question", "answer"],
                 },
@@ -222,6 +247,8 @@ def serve(root: str = ".") -> None:
                 int(arguments.get("token_budget", 800)),
                 arguments.get("repo"),
                 bool(arguments.get("dry_run", False)),
+                str(arguments.get("verification_id", "")),
+                str(arguments.get("agent", "")),
             )
         elif name == "capture_task":
             data = tool_capture_task(
@@ -236,6 +263,8 @@ def serve(root: str = ".") -> None:
                 arguments.get("validation"),
                 arguments.get("repo"),
                 arguments.get("resolve_event_id"),
+                str(arguments.get("verification_id", "")),
+                str(arguments.get("agent", "")),
             )
         elif name == "remember_task":
             data = tool_remember_task(
@@ -296,6 +325,8 @@ def serve_jsonl(root: str = ".") -> None:
                     int(req.get("token_budget", 800)),
                     req.get("repo"),
                     bool(req.get("dry_run", False)),
+                    str(req.get("verification_id", "")),
+                    str(req.get("agent", "")),
                 )
             elif tool == "capture_task":
                 data = tool_capture_task(
@@ -310,6 +341,8 @@ def serve_jsonl(root: str = ".") -> None:
                     req.get("validation"),
                     req.get("repo"),
                     req.get("resolve_event_id"),
+                    str(req.get("verification_id", "")),
+                    str(req.get("agent", "")),
                 )
             elif tool == "remember_task":
                 data = tool_remember_task(
@@ -357,6 +390,7 @@ def _resolve_error(question: str, token_budget: int, error: dict[str, Any]) -> d
         "question": question,
         "status": status,
         "enabled": False,
+        "strict_mode": False,
         "reason": reason,
         "candidates": error.get("candidates", []),
         "token_budget": token_budget,
@@ -368,4 +402,5 @@ def _resolve_error(question: str, token_budget: int, error: dict[str, Any]) -> d
         "context": "",
         "repo_root": "",
         "event_id": None,
+        "verification_id": "",
     }

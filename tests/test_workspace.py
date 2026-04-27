@@ -106,6 +106,7 @@ def test_capture_and_savings_events(tmp_path: Path) -> None:
 
     skipped = ws.capture("How does cache load?", "It calls load_cache.")
     assert skipped["saved"] is False
+    assert skipped["final_status_line"].startswith("Memographix: not saved - ")
 
     saved = ws.capture(
         "How does cache load?",
@@ -146,12 +147,10 @@ def test_repo_control_disable_enable_preserves_memory_and_reindexes(tmp_path: Pa
         "handle returns True.",
         evidence=["service.py"],
     )
-    assert skipped == {
-        "saved": False,
-        "task_id": None,
-        "reason": "paused for this repo",
-        "evidence": [],
-    }
+    assert skipped["saved"] is False
+    assert skipped["reason"] == "paused for this repo"
+    assert skipped["evidence"] == []
+    assert skipped["final_status_line"] == "Memographix: disabled for this repo"
     assert ws.stats()["tasks"] == 1
 
     source.write_text("def handle_new():\n    return False\n", encoding="utf-8")
@@ -161,6 +160,41 @@ def test_repo_control_disable_enable_preserves_memory_and_reindexes(tmp_path: Pa
     symbols = {row["name"] for row in exported["symbols"]}
     assert "handle_new" in symbols
     assert "handle" not in symbols
+
+
+def test_guard_reports_no_mcp_usage_and_clean_after_capture(tmp_path: Path) -> None:
+    (tmp_path / "service.py").write_text("def handle():\n    return True\n", encoding="utf-8")
+    ws = Workspace.open(tmp_path)
+    ws.setup(agents="codex")
+
+    warning = ws.guard()
+    assert warning["status"] == "warning"
+    assert "no_mcp_usage" in warning["issues"]
+
+    packet = ws.automatic_context("How does service handle?", source="mcp")
+    saved = ws.capture(
+        "How does service handle?",
+        "handle returns True.",
+        resolve_event_id=packet["event_id"],
+        outcome="passed",
+        source="mcp",
+    )
+    assert saved["saved"] is True
+
+    clean = ws.guard()
+    assert clean["status"] == "clean"
+    assert clean["issues"] == []
+
+
+def test_guard_disabled_repo_reports_disabled_not_failed(tmp_path: Path) -> None:
+    (tmp_path / "service.py").write_text("def handle():\n    return True\n", encoding="utf-8")
+    ws = Workspace.open(tmp_path)
+    ws.setup(agents="codex")
+    ws.disable("off")
+
+    result = ws.guard()
+    assert result["status"] == "disabled"
+    assert result["ok"] is True
 
 
 def test_incremental_index_updates_changed_and_deleted_files(tmp_path: Path) -> None:

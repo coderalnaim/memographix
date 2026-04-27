@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -40,6 +42,7 @@ class Workspace:
             {
                 "enabled": True,
                 "setup_completed": True,
+                "strict_agent_memory": True,
                 "setup_agents": ",".join(selected_agents),
                 "disabled_reason": "",
                 "last_enabled_at": now,
@@ -114,6 +117,8 @@ class Workspace:
         refresh: bool = False,
         record_event: bool = False,
         source: str = "api",
+        verification_id: str = "",
+        agent: str = "",
     ) -> ContextPacket:
         packet, _event_id = self._context_with_event(
             question,
@@ -121,6 +126,8 @@ class Workspace:
             refresh=refresh,
             record_event=record_event,
             source=source,
+            verification_id=verification_id,
+            agent=agent,
         )
         return packet
 
@@ -132,13 +139,20 @@ class Workspace:
         refresh: bool = False,
         record_event: bool = False,
         source: str = "api",
+        verification_id: str = "",
+        agent: str = "",
     ) -> tuple[ContextPacket, int | None]:
         if refresh or self.stats()["files"] == 0:
             self.index()
         packet = self.engine.recall(question, budget=budget)
         event_id = None
         if record_event:
-            event_id = self.engine.record_resolve_event(packet, source=source)
+            event_id = self.engine.record_resolve_event(
+                packet,
+                source=source,
+                verification_id=verification_id,
+                agent=agent,
+            )
         return packet, event_id
 
     def recall(
@@ -149,6 +163,8 @@ class Workspace:
         refresh: bool = False,
         record_event: bool = False,
         source: str = "api",
+        verification_id: str = "",
+        agent: str = "",
     ) -> ContextPacket:
         return self.context(
             question,
@@ -156,6 +172,8 @@ class Workspace:
             refresh=refresh,
             record_event=record_event,
             source=source,
+            verification_id=verification_id,
+            agent=agent,
         )
 
     def remember(
@@ -180,14 +198,28 @@ class Workspace:
         outcome: str | None = None,
         resolve_event_id: int | None = None,
         source: str = "api",
+        verification_id: str = "",
+        agent: str = "",
     ) -> dict[str, Any]:
         control = load_repo_control(self.root)
         if not control.configured or not control.setup_completed:
             reason = control.disabled_status or "repo not configured"
-            return {"saved": False, "task_id": None, "reason": reason, "evidence": []}
+            return {
+                "saved": False,
+                "task_id": None,
+                "reason": reason,
+                "evidence": [],
+                "final_status_line": f"Memographix: not saved - {reason}",
+            }
         if not control.enabled:
             reason = control.disabled_status or "repo disabled"
-            return {"saved": False, "task_id": None, "reason": reason, "evidence": []}
+            return {
+                "saved": False,
+                "task_id": None,
+                "reason": reason,
+                "evidence": [],
+                "final_status_line": "Memographix: disabled for this repo",
+            }
         if self.stats()["files"] == 0:
             self.index()
         return self.engine.capture(
@@ -200,6 +232,8 @@ class Workspace:
             outcome=outcome,
             resolve_event_id=resolve_event_id,
             source=source,
+            verification_id=verification_id,
+            agent=agent,
         )
 
     def changed(self) -> list[TaskMemory]:
@@ -210,6 +244,132 @@ class Workspace:
 
     def savings(self, since_days: int = 30) -> dict[str, Any]:
         return self.engine.savings(since_days=since_days)
+
+    def start_agent_verification(self, agent: str = "codex") -> dict[str, Any]:
+        status = self.status()
+        verification_id = f"mgx-verify-{uuid.uuid4().hex[:12]}"
+        prompt = _verification_prompt(self.root, agent, verification_id)
+        self.engine.record_agent_verification_start(
+            verification_id=verification_id,
+            agent=agent,
+            prompt=prompt,
+        )
+        return {
+            "root": str(self.root),
+            "agent": agent,
+            "verification_id": verification_id,
+            "prompt": prompt,
+            "configured": status["configured"],
+            "enabled": status["enabled"],
+            "strict_mode": status["strict_mode"],
+        }
+
+    def wait_agent_verification(
+        self,
+        verification_id: str,
+        *,
+        agent: str = "codex",
+        wait_seconds: int = 120,
+    ) -> dict[str, Any]:
+        deadline = time.monotonic() + max(0, wait_seconds)
+        result = self.engine.verification_result(verification_id)
+        while wait_seconds > 0 and not result["verified"] and time.monotonic() < deadline:
+            time.sleep(1)
+            result = self.engine.verification_result(verification_id)
+        if result["verified"]:
+            self.engine.record_agent_verification_result(
+                verification_id=verification_id,
+                agent=agent,
+                status="verified",
+            )
+            final_status = "verified"
+            reason = ""
+        else:
+            final_status = "failed"
+            reason = "no matching real resolve_task and saved capture_task events were recorded"
+            self.engine.record_agent_verification_result(
+                verification_id=verification_id,
+                agent=agent,
+                status=final_status,
+                reason=reason,
+            )
+        verification = self.engine.verification_result(verification_id)
+        status = self.status()
+        return {
+            "root": str(self.root),
+            "agent": agent,
+            "verification_id": verification_id,
+            "wait_seconds": wait_seconds,
+            "configured": status["configured"],
+            "enabled": status["enabled"],
+            "strict_mode": status["strict_mode"],
+            "verified": verification["verified"],
+            "status": "verified" if verification["verified"] else final_status,
+            "reason": "" if verification["verified"] else reason,
+            "resolve_events": verification["resolve_events"],
+            "capture_events": verification["capture_events"],
+            "last_resolve_at": verification["last_resolve_at"],
+            "last_capture_at": verification["last_capture_at"],
+            "last_capture_status": verification["last_capture_status"],
+        }
+
+    def verify_agent(self, agent: str = "codex", wait_seconds: int = 120) -> dict[str, Any]:
+        started = self.start_agent_verification(agent=agent)
+        result = self.wait_agent_verification(
+            started["verification_id"],
+            agent=agent,
+            wait_seconds=wait_seconds,
+        )
+        result["prompt"] = started["prompt"]
+        return result
+
+    def guard(self, since_hours: int = 24) -> dict[str, Any]:
+        status = self.status()
+        if not status["configured"] or not status["setup_completed"]:
+            return {
+                "root": str(self.root),
+                "status": "not_configured",
+                "ok": True,
+                "issues": [],
+                "reason": status["reason"] or "repo not configured",
+                "modified_files": [],
+            }
+        if not status["enabled"]:
+            return {
+                "root": str(self.root),
+                "status": "disabled",
+                "ok": True,
+                "issues": [],
+                "reason": status["reason"] or "repo disabled",
+                "modified_files": [],
+            }
+        since_days = max(1, (since_hours + 23) // 24)
+        savings = self.savings(since_days=since_days)
+        modified_files = sorted(self.engine.recent_changed_files())
+        issues = []
+        if not savings.get("last_mcp_call_at"):
+            issues.append("no_mcp_usage")
+        if savings.get("last_resolve_at") and (
+            not savings.get("last_capture_at")
+            or str(savings["last_capture_at"]) < str(savings["last_resolve_at"])
+        ):
+            issues.append("resolve_without_capture")
+        if modified_files and not (
+            savings.get("captures_saved", 0) or savings.get("skipped_captures", 0)
+        ):
+            issues.append("modified_files_without_capture")
+        return {
+            "root": str(self.root),
+            "status": "clean" if not issues else "warning",
+            "ok": not issues,
+            "issues": issues,
+            "since_hours": since_hours,
+            "modified_files": modified_files,
+            "last_mcp_call_at": savings.get("last_mcp_call_at", ""),
+            "last_resolve_at": savings.get("last_resolve_at", ""),
+            "last_capture_at": savings.get("last_capture_at", ""),
+            "last_capture_status": savings.get("last_capture_status", ""),
+        }
 
     def status(self) -> dict[str, Any]:
         control = load_repo_control(self.root)
@@ -244,6 +404,8 @@ class Workspace:
             "setup_completed": control.setup_completed,
             "setup_agents": list(setup_agents),
             "enabled": control.configured and control.setup_completed and control.enabled,
+            "strict_mode": control.strict_agent_memory,
+            "strict_agent_memory": control.strict_agent_memory,
             "reason": control.disabled_status,
             "disabled_reason": control.disabled_reason,
             "last_enabled_at": control.last_enabled_at,
@@ -269,6 +431,8 @@ class Workspace:
         *,
         dry_run: bool = False,
         source: str = "mcp",
+        verification_id: str = "",
+        agent: str = "",
     ) -> dict[str, Any]:
         status = self.status()
         if not status["configured"] or not status["setup_completed"]:
@@ -283,11 +447,15 @@ class Workspace:
             refresh=True,
             record_event=not dry_run,
             source=source,
+            verification_id=verification_id,
+            agent=agent,
         )
         data = packet.to_dict()
         data["enabled"] = True
+        data["strict_mode"] = status["strict_mode"]
         data["repo_root"] = str(self.root)
         data["event_id"] = event_id
+        data["verification_id"] = verification_id
         data["dry_run"] = dry_run
         return data
 
@@ -312,6 +480,7 @@ class Workspace:
             if item["mode"] == "mcp" and item["agent"] in selected_agents
         ]
         savings = self.savings() if status["db_exists"] else {}
+        verification_status = self.engine.verification_status() if status["db_exists"] else {}
         result = {
             "root": str(self.root),
             "db_exists": status["db_exists"],
@@ -320,6 +489,7 @@ class Workspace:
             "setup_completed": status["setup_completed"],
             "setup_agents": status["setup_agents"],
             "enabled": status["enabled"],
+            "strict_mode": status["strict_mode"],
             "disabled_reason": status["disabled_reason"],
             "status_reason": status["reason"],
             "mcp_config_exists": status["mcp_config_exists"],
@@ -342,10 +512,17 @@ class Workspace:
                 + savings.get("skipped_captures", 0),
                 "last_resolve_at": savings.get("last_resolve_at", ""),
                 "last_capture_at": savings.get("last_capture_at", ""),
+                "last_capture_status": savings.get("last_capture_status", ""),
                 "last_mcp_call_at": savings.get("last_mcp_call_at", ""),
                 "last_tool_source": savings.get("last_tool_source", ""),
                 "has_agent_calls": bool(
                     savings.get("last_resolve_at") or savings.get("last_capture_at")
+                ),
+                "agent_verified": verification_status.get("agent_verified", False),
+                "last_verified_agent_at": verification_status.get("last_verified_agent_at", ""),
+                "last_verified_agent": verification_status.get("last_verified_agent", ""),
+                "last_unverified_warning": verification_status.get(
+                    "last_unverified_warning", ""
                 ),
             },
         }
@@ -414,6 +591,7 @@ def _disabled_response(
         "question": question,
         "status": "disabled",
         "enabled": False,
+        "strict_mode": bool(status.get("strict_mode", False)),
         "reason": reason,
         "token_budget": budget,
         "estimated_tokens": 0,
@@ -425,8 +603,29 @@ def _disabled_response(
         "repo_status": status,
         "repo_root": str(status.get("root", "")),
         "event_id": None,
+        "verification_id": "",
         "dry_run": False,
     }
+
+
+def _verification_prompt(root: Path, agent: str, verification_id: str) -> str:
+    return (
+        "Memographix verification task.\n"
+        f"Repo: {root}\n"
+        f"Agent: {agent}\n"
+        f"Verification ID: {verification_id}\n\n"
+        "Follow these steps exactly:\n"
+        "1. Call the Memographix MCP `resolve_task` tool with "
+        f"`question=\"Memographix verification {verification_id}: confirm activation\"`, "
+        f"`repo=\"{root}\"`, `verification_id=\"{verification_id}\"`, and "
+        f"`agent=\"{agent}\"`.\n"
+        "2. Call the Memographix MCP `capture_task` tool with the same question, "
+        "`answer=\"Memographix verification completed.\"`, the `resolve_event_id` returned "
+        "by `resolve_task`, "
+        f"`verification_id=\"{verification_id}\"`, `agent=\"{agent}\"`, and "
+        "`outcome=\"verified\"`.\n"
+        "3. Reply only with the `final_status_line` returned by `capture_task`."
+    )
 
 
 def _utc_now() -> str:

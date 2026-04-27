@@ -29,6 +29,7 @@ def test_mcp_tool_functions(tmp_path: Path) -> None:
     packet = tool_resolve_task(str(tmp_path), "How is memory saved?", 300)
     assert packet["status"] == "fresh"
     assert packet["repo_root"] == str(tmp_path)
+    assert packet["strict_mode"] is True
     assert packet["event_id"] is not None
     assert tool_freshness_check(str(tmp_path))["stale_tasks"] == []
 
@@ -44,6 +45,7 @@ def test_capture_task_evidence_gate(tmp_path: Path) -> None:
     )
     assert skipped["saved"] is False
     assert "evidence" in skipped["reason"]
+    assert skipped["final_status_line"].startswith("Memographix: not saved - ")
 
     saved = tool_capture_task(
         str(tmp_path),
@@ -55,6 +57,7 @@ def test_capture_task_evidence_gate(tmp_path: Path) -> None:
     )
     assert saved["saved"] is True
     assert saved["evidence"] == ["worker.py"]
+    assert saved["final_status_line"] == "Memographix: saved task memory"
 
 
 def test_capture_can_reuse_resolve_event_evidence(tmp_path: Path) -> None:
@@ -86,6 +89,8 @@ def test_global_router_resolves_registered_repo_by_alias(tmp_path: Path) -> None
     status = tool_activation_status(str(tmp_path), repo="support agent frontend")
     assert status["resolved"] is True
     assert status["repo_root"] == str(repo)
+    assert status["strict_mode"] is True
+    assert status["agent_verified"] is False
     packet = tool_resolve_task(
         str(tmp_path),
         "Explain the support agent frontend main entrypoint.",
@@ -121,12 +126,10 @@ def test_mcp_disabled_repo_skips_resolve_and_capture(tmp_path: Path) -> None:
         "run returns True.",
         evidence=["module.py"],
     )
-    assert captured == {
-        "saved": False,
-        "task_id": None,
-        "reason": "disabled during benchmark",
-        "evidence": [],
-    }
+    assert captured["saved"] is False
+    assert captured["reason"] == "disabled during benchmark"
+    assert captured["evidence"] == []
+    assert captured["final_status_line"] == "Memographix: disabled for this repo"
     assert ws.stats()["tasks"] == 0
 
 
@@ -139,3 +142,38 @@ def test_dry_run_resolve_does_not_record_event(tmp_path: Path) -> None:
     assert packet["dry_run"] is True
     assert packet["event_id"] is None
     assert ws.savings()["resolve_events"] == 0
+
+
+def test_agent_verification_requires_real_resolve_and_capture(tmp_path: Path) -> None:
+    (tmp_path / "module.py").write_text("def run():\n    return True\n", encoding="utf-8")
+    ws = Workspace.open(tmp_path)
+    ws.setup(agents="codex")
+
+    verification = ws.verify_agent(agent="codex", wait_seconds=0)
+    assert verification["verified"] is False
+    verification_id = verification["verification_id"]
+
+    packet = tool_resolve_task(
+        str(tmp_path),
+        f"Memographix verification {verification_id}: confirm activation",
+        300,
+        verification_id=verification_id,
+        agent="codex",
+    )
+    saved = tool_capture_task(
+        str(tmp_path),
+        f"Memographix verification {verification_id}: confirm activation",
+        "Memographix verification completed.",
+        resolve_event_id=packet["event_id"],
+        outcome="verified",
+        verification_id=verification_id,
+        agent="codex",
+    )
+
+    assert saved["saved"] is True
+    result = ws.engine.verification_result(verification_id)
+    assert result["verified"] is True
+    status = tool_activation_status(str(tmp_path))
+    assert status["agent_verified"] is True
+    assert status["last_verified_agent"] == "codex"
+    assert ws.savings()["resolve_events"] == 1

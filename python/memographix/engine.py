@@ -300,7 +300,10 @@ class LocalEngine:
         outcome: str | None = None,
         resolve_event_id: int | None = None,
         source: str = "api",
+        verification_id: str = "",
+        agent: str = "",
     ) -> dict[str, Any]:
+        verification_id = verification_id or _verification_id_from_text(question)
         validation_artifact = bool(commands or tests or outcome)
         candidate_paths = [*(evidence or []), *(changed_files or [])]
         if not candidate_paths and resolve_event_id:
@@ -325,9 +328,17 @@ class LocalEngine:
                     "outcome": outcome or "",
                     "source": source,
                     "resolve_event_id": resolve_event_id,
+                    "verification_id": verification_id,
+                    "agent": agent,
                 },
             )
-            return {"saved": False, "task_id": None, "reason": reason, "evidence": []}
+            return {
+                "saved": False,
+                "task_id": None,
+                "reason": reason,
+                "evidence": [],
+                "final_status_line": f"Memographix: not saved - {reason}",
+            }
         validation = {
             "commands": commands or [],
             "tests": tests or [],
@@ -350,11 +361,27 @@ class LocalEngine:
                 "validation": validation,
                 "source": source,
                 "resolve_event_id": resolve_event_id,
+                "verification_id": verification_id,
+                "agent": agent,
             },
         )
-        return {"saved": True, "task_id": task_id, "reason": "", "evidence": safe_evidence}
+        return {
+            "saved": True,
+            "task_id": task_id,
+            "reason": "",
+            "evidence": safe_evidence,
+            "final_status_line": "Memographix: saved task memory",
+        }
 
-    def record_resolve_event(self, packet: ContextPacket, *, source: str = "api") -> int:
+    def record_resolve_event(
+        self,
+        packet: ContextPacket,
+        *,
+        source: str = "api",
+        verification_id: str = "",
+        agent: str = "",
+    ) -> int:
+        verification_id = verification_id or _verification_id_from_text(packet.question)
         baseline_tokens = self._baseline_tokens_for_evidence(packet.evidence)
         estimated_saved = (
             max(0, baseline_tokens - packet.estimated_tokens)
@@ -375,6 +402,8 @@ class LocalEngine:
                 "warnings": packet.warnings,
                 "evidence": [ev.to_dict() for ev in packet.evidence],
                 "source": source,
+                "verification_id": verification_id,
+                "agent": agent,
             },
         )
 
@@ -444,15 +473,140 @@ class LocalEngine:
                 "top_repeated_tasks": top_tasks,
                 "last_resolve_at": last_resolve["created_at"] if last_resolve else "",
                 "last_capture_at": last_capture["created_at"] if last_capture else "",
+                "last_capture_status": last_capture["status"] if last_capture else "",
                 "last_mcp_call_at": last_mcp["created_at"] if last_mcp else "",
                 "last_tool_source": self._event_source(last_tool) if last_tool else "",
+                "warnings": [],
             }
             if not resolve_rows and not capture_rows:
                 result["diagnostic"] = (
                     "No agent tool calls recorded yet. Run `mgx doctor --live`, restart your "
                     "agent, and open the chat from this repo or mention a registered repo name."
                 )
+            elif last_resolve and (
+                not last_capture
+                or str(last_capture["created_at"]) < str(last_resolve["created_at"])
+            ):
+                result["warnings"].append(
+                    "Memographix saw resolve_task but no later capture_task. The agent may be "
+                    "retrieving context without saving completed work."
+                )
+            if self._recent_changed_files() and not capture_rows:
+                result["warnings"].append(
+                    "This repo has modified files but no capture_task event in the selected window."
+                )
             return result
+
+    def record_agent_verification_start(
+        self,
+        *,
+        verification_id: str,
+        agent: str,
+        prompt: str,
+    ) -> int:
+        return self._record_event(
+            event_type="agent_verification",
+            question=f"Memographix agent verification {verification_id}",
+            status="started",
+            data={
+                "verification_id": verification_id,
+                "agent": agent,
+                "prompt": prompt,
+                "source": "cli",
+            },
+        )
+
+    def record_agent_verification_result(
+        self,
+        *,
+        verification_id: str,
+        agent: str,
+        status: str,
+        reason: str = "",
+    ) -> int:
+        return self._record_event(
+            event_type="agent_verification",
+            question=f"Memographix agent verification {verification_id}",
+            status=status,
+            skipped_reason=reason,
+            data={
+                "verification_id": verification_id,
+                "agent": agent,
+                "reason": reason,
+                "source": "cli",
+            },
+        )
+
+    def verification_result(self, verification_id: str) -> dict[str, Any]:
+        with closing(connect(self.db_path)) as conn:
+            rows = conn.execute(
+                "SELECT * FROM memory_events ORDER BY created_at DESC",
+            ).fetchall()
+        matching = [row for row in rows if _event_verification_id(row) == verification_id]
+        resolves = [
+            row
+            for row in matching
+            if row["event_type"] == "resolve_task" and self._event_source(row) == "mcp"
+        ]
+        captures = [
+            row
+            for row in matching
+            if row["event_type"] == "capture_task" and self._event_source(row) == "mcp"
+        ]
+        saved_capture = next((row for row in captures if row["status"] == "saved"), None)
+        last_capture = captures[0] if captures else None
+        agent = ""
+        for row in matching:
+            agent = str(json_loads(row["data_json"]).get("agent", ""))
+            if agent:
+                break
+        verified = bool(resolves and saved_capture)
+        return {
+            "verification_id": verification_id,
+            "agent": agent,
+            "verified": verified,
+            "status": "verified" if verified else "pending",
+            "resolve_events": len(resolves),
+            "capture_events": len(captures),
+            "last_resolve_at": resolves[0]["created_at"] if resolves else "",
+            "last_capture_at": last_capture["created_at"] if last_capture else "",
+            "last_capture_status": last_capture["status"] if last_capture else "",
+        }
+
+    def verification_status(self) -> dict[str, Any]:
+        with closing(connect(self.db_path)) as conn:
+            rows = conn.execute(
+                "SELECT * FROM memory_events ORDER BY created_at DESC",
+            ).fetchall()
+        verified_capture = next(
+            (
+                row
+                for row in rows
+                if row["event_type"] == "capture_task"
+                and row["status"] == "saved"
+                and self._event_source(row) == "mcp"
+                and _event_verification_id(row)
+            ),
+            None,
+        )
+        last_verification = next(
+            (row for row in rows if row["event_type"] == "agent_verification"),
+            None,
+        )
+        warning = ""
+        if last_verification and last_verification["status"] != "verified":
+            warning = str(last_verification["skipped_reason"] or last_verification["status"])
+        data = json_loads(verified_capture["data_json"]) if verified_capture else {}
+        return {
+            "agent_verified": verified_capture is not None,
+            "last_verified_agent_at": verified_capture["created_at"] if verified_capture else "",
+            "last_verified_agent": str(data.get("agent", "")) if data else "",
+            "last_verification_id": str(data.get("verification_id", "")) if data else "",
+            "last_unverified_warning": warning,
+        }
+
+    def recent_changed_files(self) -> set[str]:
+        return self._recent_changed_files()
 
     def _record_event(
         self,
@@ -1013,6 +1167,17 @@ def keyword_counts(text: str) -> Counter:
 
 def indent(text: str, prefix: str) -> str:
     return "\n".join(prefix + line if line else line for line in text.splitlines())
+
+
+def _event_verification_id(row: Any) -> str:
+    if row is None:
+        return ""
+    return str(json_loads(row["data_json"]).get("verification_id", ""))
+
+
+def _verification_id_from_text(text: str) -> str:
+    match = re.search(r"\bmgx-verify-[a-f0-9]{12}\b", text, flags=re.IGNORECASE)
+    return match.group(0).lower() if match else ""
 
 
 def _symbol_tuple_to_dict(row: tuple) -> dict[str, Any]:

@@ -16,12 +16,16 @@ Run setup once per repo:
 
 ```bash
 mgx setup
+mgx doctor --live
+mgx verify-agent
 ```
 
 Setup writes `.memographix/mcp.json`, configures supported MCP clients, and
 registers the repo for global routing. It also installs project rules for
 Codex, Claude, Cursor, Copilot, Gemini, OpenCode, Aider, and Windsurf-style
 agents. Restart already-open agents after setup so they reload MCP tools.
+`mgx doctor --live` verifies the local server and routing. `mgx verify-agent`
+verifies that the active agent actually calls Memographix.
 The old `pip install "memographix[mcp]"` form remains accepted for backward
 compatibility, but it is no longer required.
 
@@ -48,9 +52,10 @@ setup installs project rules and the CLI fallback for it.
 
 ## Expected Agent Behavior
 
-Agents should use these tools automatically:
+Strict mode is enabled by default. Agents must use these tools automatically:
 
-- `resolve_task`: call before implementation, debugging, architecture, or
+- `resolve_task`: call before repo-specific answers, file inspection, shell
+  exploration, implementation, debugging, architecture, documentation edits, or
   test-failure work. Pass `repo` when the chat is outside the repo or the user
   mentions a repo name.
 - `capture_task`: call after useful work with the answer, changed files,
@@ -73,6 +78,17 @@ mgx status
 `remember_task` remains available as a backward-compatible alias for
 `capture_task`.
 
+Every final answer after repo work must include exactly one concise status line:
+
+```text
+Memographix: saved task memory
+Memographix: not saved - <reason>
+Memographix: disabled for this repo
+```
+
+Agents must reuse the `final_status_line` returned by `capture_task` and must
+not claim memory was saved unless `capture_task` returns `saved: true`.
+
 ## Fallback CLI
 
 If an agent cannot use MCP yet, project rules tell it to call:
@@ -91,13 +107,16 @@ mgx doctor --live
 ```
 
 Use this to confirm that local state, MCP config, native indexing, project
-rules, live MCP startup, and repo routing are working. If `mgx savings` reports
-zero events, the agent has not called Memographix yet.
+rules, live MCP startup, and repo routing are working. Use `mgx verify-agent` to
+confirm that the active agent actually calls Memographix. If `mgx savings`
+reports zero events, the agent has not called Memographix yet.
 
 Useful diagnostics:
 
 ```bash
 mgx repos
 mgx repair --mcp
+mgx verify-agent
+mgx guard
 mgx savings
 ```

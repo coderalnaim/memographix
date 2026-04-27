@@ -46,6 +46,7 @@ def test_cli_setup_doctor_and_savings(tmp_path: Path, capsys, monkeypatch) -> No
     setup = json.loads(capsys.readouterr().out)
     assert setup["index"]["files"] == 1
     assert setup["status"]["enabled"] is True
+    assert setup["status"]["strict_mode"] is True
     assert setup["status"]["setup_agents"] == ["codex"]
     assert any(item["agent"] == "codex" for item in setup["integrations"])
     assert setup["codex_mcp"]["registered"] is True
@@ -62,12 +63,14 @@ def test_cli_setup_doctor_and_savings(tmp_path: Path, capsys, monkeypatch) -> No
     assert doctor["db_exists"] is True
     assert doctor["config_exists"] is True
     assert doctor["enabled"] is True
+    assert doctor["strict_mode"] is True
     assert doctor["setup_agents"] == ["codex"]
     assert doctor["codex_mcp_registered"] is True
     assert doctor["manual_mcp_config_required"] is False
     assert doctor["registry_registered"] is True
     assert doctor["live"]["ok"] is True
     assert doctor["live"]["dry_run_resolve_verified"] is True
+    assert doctor["activation"]["agent_verified"] is False
 
     main(["--root", str(tmp_path), "savings", "--json"])
     savings = json.loads(capsys.readouterr().out)
@@ -78,6 +81,17 @@ def test_cli_setup_doctor_and_savings(tmp_path: Path, capsys, monkeypatch) -> No
     main(["--root", str(tmp_path), "repos", "--json"])
     repos = json.loads(capsys.readouterr().out)
     assert repos["repos"][0]["root"] == str(tmp_path)
+
+    main(["--root", str(tmp_path), "verify-agent", "--agent", "codex", "--wait", "0", "--json"])
+    verification = json.loads(capsys.readouterr().out)
+    assert verification["verified"] is False
+    assert verification["verification_id"].startswith("mgx-verify-")
+    assert "resolve_task" in verification["prompt"]
+
+    main(["--root", str(tmp_path), "guard", "--json"])
+    guard = json.loads(capsys.readouterr().out)
+    assert guard["status"] == "warning"
+    assert "no_mcp_usage" in guard["issues"]
 
 
 def test_setup_writes_supported_mcp_integrations(tmp_path: Path, monkeypatch) -> None:
@@ -115,6 +129,18 @@ def test_setup_writes_supported_mcp_integrations(tmp_path: Path, monkeypatch) ->
     assert "mcpServers" in json.loads((tmp_path / "windsurf-mcp.json").read_text(encoding="utf-8"))
     windsurf = json.loads((tmp_path / "windsurf-mcp.json").read_text(encoding="utf-8"))
     assert windsurf["mcpServers"]["memographix"]["args"] == ["serve"]
+
+    for rule_path in (
+        tmp_path / "AGENTS.md",
+        tmp_path / "CLAUDE.md",
+        tmp_path / "GEMINI.md",
+        tmp_path / ".cursor" / "rules" / "memographix.mdc",
+        tmp_path / ".github" / "copilot-instructions.md",
+    ):
+        text = rule_path.read_text(encoding="utf-8")
+        assert "Before reading files" in text
+        assert "capture_task" in text
+        assert "Memographix: saved task memory" in text
 
 
 def test_repair_mcp_flags_duplicate_memographix_servers(

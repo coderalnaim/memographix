@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "memographix"
-version = "0.1.6"
+version = "0.1.7"
 description = "Local AI agent memory layer for repeated developer tasks, fresh context packets, and low-token repo recall."
 readme = "README.md"
 requires-python = ">=3.10,<3.15"

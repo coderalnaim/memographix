@@ -15,18 +15,23 @@ SUPPORTED_AGENTS = (
 
 AGENT_RULES = """# Memographix
 
-This project can use Memographix local task memory in `.memographix/`.
+This project uses strict Memographix local task memory in `.memographix/`.
 
-Use Memographix automatically for implementation, architecture, debugging, and
-test-failure work:
+Mandatory workflow for any repo-specific answer, file inspection, shell
+exploration, debugging, implementation, review, README/doc edit, or test work:
 
-- Before answering, call the `resolve_task` MCP tool with the user's task.
+- Before reading files, running repo commands, or answering, call the
+  `resolve_task` MCP tool with the user's task.
 - If the chat is not opened from this repo, pass the repo name/path to
   `resolve_task` when the user mentions it.
 - If MCP is unavailable, run `mgx ask "<user task>" --budget 800`.
-- After useful work, call the `capture_task` MCP tool with the final answer,
-  changed files, commands, tests, outcome, and the `resolve_event_id` returned
-  by `resolve_task` when available.
+- After useful repo work, call the `capture_task` MCP tool with the final
+  answer, changed files, commands, tests, outcome, and the `resolve_event_id`
+  returned by `resolve_task` when available.
+- End every final answer with exactly one short Memographix status line:
+  `Memographix: saved task memory`,
+  `Memographix: not saved - <reason>`, or
+  `Memographix: disabled for this repo`.
 
 Rules:
 - Prefer fresh Memographix task capsules over re-reading raw files.
@@ -35,6 +40,7 @@ Rules:
   or `repo not configured`, continue normally without Memographix context and do
   not call `capture_task`.
 - Do not ask the developer to manually save memory unless automatic capture fails.
+- Do not say task memory was saved unless `capture_task` returns `saved: true`.
 - Never treat stale memory as authoritative.
 """
 

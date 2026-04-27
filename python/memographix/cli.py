@@ -67,6 +67,22 @@ def main(argv: list[str] | None = None) -> None:
     savings.add_argument("--since", default="30d")
     savings.add_argument("--json", action="store_true")
 
+    verify = sub.add_parser(
+        "verify-agent",
+        help="verify that an AI agent actually calls Memographix",
+    )
+    verify.add_argument(
+        "--agent",
+        default="codex",
+        choices=["codex", "claude", "cursor", "copilot", "gemini", "opencode", "aider", "windsurf"],
+    )
+    verify.add_argument("--wait", type=int, default=120)
+    verify.add_argument("--json", action="store_true")
+
+    guard = sub.add_parser("guard", help="check for missed Memographix agent usage")
+    guard.add_argument("--since", default="24h")
+    guard.add_argument("--json", action="store_true")
+
     export = sub.add_parser("export", help="export graph and task memory as JSON")
     export.add_argument("--out", type=Path, default=Path("memographix-export.json"))
 
@@ -148,6 +164,7 @@ def main(argv: list[str] | None = None) -> None:
             print(f"configured: {result['configured']}")
             print(f"setup_completed: {result['setup_completed']}")
             print(f"enabled: {result['enabled']}")
+            print(f"strict_mode: {result['strict_mode']}")
             if result["reason"]:
                 print(f"reason: {result['reason']}")
             print(f"last_indexed_at: {result['last_indexed_at'] or '-'}")
@@ -216,13 +233,27 @@ def main(argv: list[str] | None = None) -> None:
                 print("mcp_runtime_required: install or upgrade memographix from PyPI")
             print(f"native_index_available: {result['native_index_available']}")
             print(f"enabled: {result['enabled']}")
+            print(f"strict_mode: {result['strict_mode']}")
             print(f"registry_registered: {result['registry_registered']}")
             ready = [item for item in result["integrations"] if item["ready"]]
             print(f"mcp_integrations_ready: {len(ready)}/{len(result['integrations'])}")
             activation = result["activation"]
             print(f"agent_tool_calls_seen: {activation['has_agent_calls']}")
+            print(f"agent_verified: {activation['agent_verified']}")
             if activation["last_mcp_call_at"]:
                 print(f"last_mcp_call_at: {activation['last_mcp_call_at']}")
+            if activation["last_capture_at"]:
+                print(
+                    f"last_capture_at: {activation['last_capture_at']} "
+                    f"({activation['last_capture_status'] or 'unknown'})"
+                )
+            if activation["last_verified_agent_at"]:
+                print(
+                    f"last_verified_agent_at: {activation['last_verified_agent_at']} "
+                    f"({activation['last_verified_agent'] or 'agent'})"
+                )
+            if activation["last_unverified_warning"]:
+                print(f"last_unverified_warning: {activation['last_unverified_warning']}")
             if result["status_reason"]:
                 print(f"status_reason: {result['status_reason']}")
             if args.live:
@@ -256,8 +287,60 @@ def main(argv: list[str] | None = None) -> None:
                 print(result["diagnostic"])
                 print("Next checks:")
                 print("- mgx doctor --live")
+                print("- mgx verify-agent")
                 print("- restart your AI agent so it reloads MCP tools")
                 print("- open the chat from this repo or mention a registered repo name")
+            if result.get("warnings"):
+                print()
+                print("Warnings:")
+                for warning in result["warnings"]:
+                    print(f"- {warning}")
+    elif args.cmd == "verify-agent":
+        if args.json:
+            result = ws.verify_agent(agent=args.agent, wait_seconds=args.wait)
+            print(json.dumps(result, indent=2))
+        else:
+            started = ws.start_agent_verification(agent=args.agent)
+            print("Memographix agent verification")
+            print(f"agent: {started['agent']}")
+            print(f"verification_id: {started['verification_id']}")
+            print(f"strict_mode: {started['strict_mode']}")
+            print()
+            print("Paste this prompt into the AI agent you want to verify:")
+            print()
+            print(started["prompt"])
+            if args.wait > 0:
+                print()
+                print(f"Waiting up to {args.wait}s for real MCP calls...")
+            result = ws.wait_agent_verification(
+                started["verification_id"],
+                agent=args.agent,
+                wait_seconds=args.wait,
+            )
+            print()
+            print(f"status: {result['status']}")
+            if result["reason"]:
+                print(f"reason: {result['reason']}")
+            print(f"resolve_events: {result['resolve_events']}")
+            print(f"capture_events: {result['capture_events']}")
+    elif args.cmd == "guard":
+        result = ws.guard(since_hours=_parse_since_hours(args.since))
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            print("Memographix guard")
+            print(f"status: {result['status']}")
+            print(f"ok: {result['ok']}")
+            if result.get("reason"):
+                print(f"reason: {result['reason']}")
+            if result.get("issues"):
+                print("issues:")
+                for issue in result["issues"]:
+                    print(f"- {issue}")
+            if result.get("modified_files"):
+                print("modified_files:")
+                for path in result["modified_files"]:
+                    print(f"- {path}")
     elif args.cmd == "export":
         out = ws.write_export(args.out)
         print(f"Exported {out.resolve()}")
@@ -303,3 +386,18 @@ def _parse_since_days(value: str) -> int:
     except ValueError as exc:
         raise SystemExit(f"invalid --since value: {value!r}") from exc
     return max(0, days)
+
+
+def _parse_since_hours(value: str) -> int:
+    clean = value.strip().lower()
+    multiplier = 1
+    if clean.endswith("h"):
+        clean = clean[:-1]
+    elif clean.endswith("d"):
+        clean = clean[:-1]
+        multiplier = 24
+    try:
+        amount = int(clean)
+    except ValueError as exc:
+        raise SystemExit(f"invalid --since value: {value!r}") from exc
+    return max(0, amount * multiplier)

@@ -6,7 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-DEFAULT_CONFIG_TEXT = """[retrieval]
+DEFAULT_CONFIG_TEXT = """strict_agent_memory = true
+
+[retrieval]
 max_file_bytes = 2000000
 task_match_threshold = 0.22
 """
@@ -91,6 +93,7 @@ class RepoControl:
     configured: bool
     setup_completed: bool
     enabled: bool
+    strict_agent_memory: bool
     setup_agents: tuple[str, ...] = ()
     disabled_reason: str = ""
     last_enabled_at: str = ""
@@ -144,6 +147,7 @@ def load_repo_control(root: Path) -> RepoControl:
             configured=False,
             setup_completed=False,
             enabled=False,
+            strict_agent_memory=False,
             setup_agents=(),
             disabled_reason="repo not configured",
         )
@@ -153,6 +157,7 @@ def load_repo_control(root: Path) -> RepoControl:
         configured=True,
         setup_completed=_as_bool(data.get("setup_completed", True)),
         enabled=_as_bool(data.get("enabled", True)),
+        strict_agent_memory=_as_bool(data.get("strict_agent_memory", True)),
         setup_agents=_parse_setup_agents(data.get("setup_agents", "")),
         disabled_reason=str(data.get("disabled_reason", "")),
         last_enabled_at=str(data.get("last_enabled_at", "")),
