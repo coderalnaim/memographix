@@ -24,12 +24,13 @@ exploration, debugging, implementation, review, README/doc edit, or test work:
 
 - Before reading files, running repo commands, or answering, call the
   `resolve_task` MCP tool with the user's task.
-- If the chat is not opened from this repo, pass the repo name/path to
-  `resolve_task` when the user mentions it.
+- Always pass `repo` as this repo's absolute path when the path is known. If the
+  chat is not opened from this repo, pass the repo name/path when the user
+  mentions it.
 - If MCP is unavailable, run `mgx ask "<user task>" --budget 800`.
 - After useful repo work, call the `capture_task` MCP tool with the final
   answer, changed files, commands, tests, outcome, and the `resolve_event_id`
-  returned by `resolve_task` when available.
+  and `repo_root` returned by `resolve_task` when available.
 - End every final answer with exactly one short Memographix status line:
   `Memographix: saved task memory`,
   `Memographix: not saved - <reason>`, or
@@ -44,6 +45,8 @@ Rules:
 - Do not ask the developer to manually save memory unless automatic capture fails.
 - Do not say task memory was saved unless `capture_task` returns `saved: true`.
 - Never treat stale memory as authoritative.
+- If `resolve_task` succeeded but `capture_task` returns `repo not configured`,
+  retry capture once with `repo` set to the `repo_root` returned by `resolve_task`.
 """
 
 CODEX_SKILL = """---
@@ -68,19 +71,23 @@ them.
    capture_task`.
 2. Before reading files, running repo commands, editing files, reviewing code,
    debugging, or answering a repo-specific question, call `resolve_task` with the
-   user's task. Pass `repo` when the user names a repo or when the chat is not
-   clearly opened inside the repo.
+   user's task. Always pass `repo` as the absolute repository root when it is
+   known. Pass the repo name/path when the user names a repo or when the chat is
+   not clearly opened inside the repo.
 3. Use the returned context only when Memographix reports it is enabled and
    fresh. If it is disabled or not configured, continue normally without
    Memographix context.
 4. After useful repo work, call `capture_task` with the answer, changed files,
    evidence, commands, tests, outcome, and the `resolve_event_id` returned by
-   `resolve_task` when available.
+   `resolve_task` when available. Also pass `repo` as the `repo_root` returned by
+   `resolve_task`.
 5. End the final answer with exactly the `final_status_line` returned by
    `capture_task`. If capture was not attempted because the repo is disabled or
    not configured, use the corresponding Memographix disabled/not-saved status.
 
 Never say memory was saved unless `capture_task` returns `saved: true`.
+If `resolve_task` succeeded but `capture_task` returns `repo not configured`,
+retry capture once with `repo` set to the `repo_root` returned by `resolve_task`.
 """
 
 MEMOGRAPHIX_HEADING_RE = re.compile(r"(?m)^# Memographix\s*$")

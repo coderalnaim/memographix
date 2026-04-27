@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
 
-from .registry import list_registered_repos, resolve_repo
+from .registry import _configured_ancestor, list_registered_repos, resolve_repo
 from .workspace import Workspace
 
 
@@ -56,6 +57,25 @@ def tool_capture_task(
         commands.extend(str(item) for item in validation.get("commands", []) or [])
         tests.extend(str(item) for item in validation.get("tests", []) or [])
         outcome = outcome or validation.get("outcome")
+    workspace = _workspace_for_resolve_event(
+        root,
+        resolve_event_id=resolve_event_id,
+        question=question,
+    )
+    if workspace:
+        return workspace.capture(
+            question=question,
+            answer=answer,
+            evidence=evidence,
+            changed_files=changed_files,
+            commands=commands,
+            tests=tests,
+            outcome=outcome,
+            resolve_event_id=resolve_event_id,
+            source="mcp",
+            verification_id=verification_id,
+            agent=agent,
+        )
     workspace, error, _resolution = _workspace_for(root, repo=repo, hint=question)
     if error:
         return {
@@ -381,6 +401,72 @@ def _workspace_for(
             resolution,
         )
     return Workspace.open(resolution.root), None, resolution
+
+
+def _workspace_for_resolve_event(
+    root: str,
+    *,
+    resolve_event_id: int | None,
+    question: str,
+) -> Workspace | None:
+    if not resolve_event_id:
+        return None
+    candidates: list[Path] = []
+    current = _configured_ancestor(Path(root).resolve())
+    if current:
+        candidates.append(current)
+    for item in list_registered_repos():
+        try:
+            candidate = Path(str(item.get("root", ""))).resolve()
+        except OSError:
+            continue
+        if candidate not in candidates:
+            candidates.append(candidate)
+    matches = [
+        candidate
+        for candidate in candidates
+        if _repo_has_resolve_event(candidate, resolve_event_id, question=question)
+    ]
+    exact = [
+        candidate
+        for candidate in matches
+        if _repo_has_resolve_event(
+            candidate,
+            resolve_event_id,
+            question=question,
+            require_question=True,
+        )
+    ]
+    if len(exact) == 1:
+        return Workspace.open(exact[0])
+    if len(matches) == 1:
+        return Workspace.open(matches[0])
+    return None
+
+
+def _repo_has_resolve_event(
+    root: Path,
+    event_id: int,
+    *,
+    question: str,
+    require_question: bool = False,
+) -> bool:
+    db_path = root / ".memographix" / "graph.sqlite"
+    if not db_path.exists():
+        return False
+    try:
+        with sqlite3.connect(db_path) as con:
+            row = con.execute(
+                "select question from memory_events where id = ? and event_type = 'resolve_task'",
+                (event_id,),
+            ).fetchone()
+    except sqlite3.Error:
+        return False
+    if row is None:
+        return False
+    if require_question:
+        return str(row[0]) == question
+    return True
 
 
 def _resolve_error(question: str, token_budget: int, error: dict[str, Any]) -> dict[str, Any]:

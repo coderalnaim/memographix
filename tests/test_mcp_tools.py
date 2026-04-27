@@ -78,6 +78,35 @@ def test_capture_can_reuse_resolve_event_evidence(tmp_path: Path) -> None:
     assert saved["evidence"]
 
 
+def test_capture_routes_by_resolve_event_when_repo_context_is_wrong(tmp_path: Path) -> None:
+    repo = tmp_path / "support-frontend"
+    repo.mkdir()
+    (repo / "worker.py").write_text("def run_worker():\n    return True\n", encoding="utf-8")
+    Workspace.open(repo).setup(agents="codex")
+
+    packet = tool_resolve_task(
+        str(tmp_path),
+        "What runs the worker?",
+        300,
+        repo=str(repo),
+    )
+    assert packet["event_id"] is not None
+
+    saved = tool_capture_task(
+        str(tmp_path),
+        "What runs the worker?",
+        "run_worker runs it.",
+        repo=str(tmp_path),
+        resolve_event_id=packet["event_id"],
+        commands=["pytest -q"],
+        outcome="passed",
+    )
+
+    assert saved["saved"] is True
+    assert saved["final_status_line"] == "Memographix: saved task memory"
+    assert Workspace.open(repo).stats()["tasks"] == 1
+
+
 def test_global_router_resolves_registered_repo_by_alias(tmp_path: Path) -> None:
     repo = tmp_path / "nocfo-support-agent-frontend"
     repo.mkdir()
