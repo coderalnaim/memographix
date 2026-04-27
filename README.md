@@ -14,7 +14,7 @@ Run this inside the repo where you want AI-agent memory:
 pipx install memographix
 mgx setup
 mgx doctor --live
-mgx verify-agent
+mgx verify-agent --repair
 mgx savings
 ```
 
@@ -41,7 +41,8 @@ memory stale when evidence files change.
 
 ```bash
 mgx doctor --live
-mgx verify-agent
+mgx verify-agent --repair
+mgx heal
 mgx guard
 mgx savings --since 30d
 ```
@@ -50,7 +51,8 @@ mgx savings --since 30d
 available, and the router can resolve this repo. It does not prove your active
 agent has actually called Memographix yet. `mgx verify-agent` gives you a short
 prompt to paste into the agent and passes only after that agent performs a real
-`resolve_task` and `capture_task`. Restart agents after setup if they were
+`resolve_task` and `capture_task`. `--repair` lets Memographix refresh stale
+MCP config before verification. Restart agents after setup if they were
 already open. This restart matters because Codex and other agents load MCP
 tools/rules at chat startup.
 
@@ -76,8 +78,12 @@ Other useful commands:
 
 ```bash
 mgx repos
-mgx repair --mcp
+mgx doctor --live --repair
+mgx heal
 ```
+
+`mgx heal` is safe to run repeatedly. It reruns setup, refreshes MCP command
+paths, reinstalls project rules, registers the repo, and keeps existing memory.
 
 ## Proof
 

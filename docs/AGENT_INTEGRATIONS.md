@@ -17,7 +17,7 @@ Run setup once per repo:
 ```bash
 mgx setup
 mgx doctor --live
-mgx verify-agent
+mgx verify-agent --repair
 ```
 
 Setup writes `.memographix/mcp.json`, configures supported MCP clients, and
@@ -28,7 +28,8 @@ agents. For Codex, setup also installs a global `memographix` Codex skill under
 repo-specific work. Restart already-open agents after setup so they reload MCP
 tools and skills.
 `mgx doctor --live` verifies the local server and routing. `mgx verify-agent`
-verifies that the active agent actually calls Memographix.
+verifies that the active agent actually calls Memographix. Add `--repair` when
+you want Memographix to refresh stale MCP config before verification.
 The old `pip install "memographix[mcp]"` form remains accepted for backward
 compatibility, but it is no longer required.
 
@@ -94,14 +95,23 @@ not claim memory was saved unless `capture_task` returns `saved: true`.
 
 ## Fallback CLI
 
-If an agent cannot use MCP yet, project rules tell it to call:
+If an agent cannot use MCP yet, project rules tell it to self-heal first:
 
 ```bash
-mgx ask "<developer task>" --budget 800
+mgx --root "<absolute repo root>" doctor --live --repair
+```
+
+The agent then retries MCP once. If MCP still cannot be used, it falls back to
+explicit repo-root CLI commands:
+
+```bash
+mgx --root "<absolute repo root>" ask "<developer task>" --budget 800
+mgx --root "<absolute repo root>" remember --question "<developer task>" --answer "<final answer>" --evidence <repo-local evidence files>
 ```
 
 Manual memory saving is an advanced fallback only. The normal flow is automatic
-capture through MCP.
+capture through MCP, and `mgx remember` now records the same capture events as
+MCP `capture_task`.
 
 ## Health Check
 
@@ -118,8 +128,9 @@ Useful diagnostics:
 
 ```bash
 mgx repos
-mgx repair --mcp
-mgx verify-agent
+mgx doctor --live --repair
+mgx heal
+mgx verify-agent --repair
 mgx guard
 mgx savings
 ```

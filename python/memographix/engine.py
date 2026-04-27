@@ -445,6 +445,22 @@ class LocalEngine:
                 for row in resolve_rows
                 if row["status"] == Freshness.FRESH.value and row["task_id"] is not None
             )
+            resolve_source_counts: Counter[str] = Counter(
+                self._event_source(row) or "unknown" for row in resolve_rows
+            )
+            capture_source_counts: Counter[str] = Counter(
+                self._event_source(row) or "unknown" for row in capture_rows
+            )
+            task_total = int(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0])
+            captured_task_ids = {
+                int(row["task_id"])
+                for row in conn.execute(
+                    """
+                    SELECT task_id FROM memory_events
+                    WHERE event_type='capture_task' AND status='saved' AND task_id IS NOT NULL
+                    """
+                ).fetchall()
+            }
             top_tasks = []
             for task_id, hits in task_counts.most_common(5):
                 task = conn.execute("SELECT question FROM tasks WHERE id=?", (task_id,)).fetchone()
@@ -469,6 +485,9 @@ class LocalEngine:
                 "stale_preventions": sum(int(row["stale_prevention"]) for row in resolve_rows),
                 "captures_saved": sum(1 for row in capture_rows if row["status"] == "saved"),
                 "skipped_captures": sum(1 for row in capture_rows if row["status"] == "skipped"),
+                "resolve_events_by_source": dict(sorted(resolve_source_counts.items())),
+                "capture_events_by_source": dict(sorted(capture_source_counts.items())),
+                "legacy_tasks_without_capture_events": max(0, task_total - len(captured_task_ids)),
                 "estimated_saved_tokens": sum(int(row["estimated_saved_tokens"]) for row in rows),
                 "top_repeated_tasks": top_tasks,
                 "last_resolve_at": last_resolve["created_at"] if last_resolve else "",

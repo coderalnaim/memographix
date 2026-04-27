@@ -5,6 +5,7 @@ import json
 import sys
 from pathlib import Path
 
+from . import __version__
 from .agent import install_agent_rules
 from .benchmark import run_benchmark
 from .mcp import serve
@@ -18,6 +19,7 @@ def main(argv: list[str] | None = None) -> None:
         description="Memographix local AI agent memory and low-token context packets.",
     )
     parser.add_argument("--root", type=Path, default=Path("."))
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     setup = sub.add_parser("setup", help="initialize indexing, MCP config, and agent rules")
@@ -55,12 +57,19 @@ def main(argv: list[str] | None = None) -> None:
     remember.add_argument("--answer", required=True)
     remember.add_argument("--evidence", nargs="*", default=None)
     remember.add_argument("--validation", default="{}")
+    remember.add_argument("--resolve-event-id", type=int, default=None)
+    remember.add_argument("--commands", nargs="*", default=None)
+    remember.add_argument("--tests", nargs="*", default=None)
+    remember.add_argument("--outcome", default="")
+    remember.add_argument("--agent", default="cli")
+    remember.add_argument("--json", action="store_true")
 
     sub.add_parser("changed", help="list task memories with stale or missing evidence")
     sub.add_parser("stats", help="show index statistics")
 
     doctor = sub.add_parser("doctor", help="show setup and integration health")
     doctor.add_argument("--live", action="store_true")
+    doctor.add_argument("--repair", action="store_true")
     doctor.add_argument("--json", action="store_true")
 
     savings = sub.add_parser("savings", help="show estimated token savings from memory reuse")
@@ -77,6 +86,7 @@ def main(argv: list[str] | None = None) -> None:
         choices=["codex", "claude", "cursor", "copilot", "gemini", "opencode", "aider", "windsurf"],
     )
     verify.add_argument("--wait", type=int, default=120)
+    verify.add_argument("--repair", action="store_true")
     verify.add_argument("--json", action="store_true")
 
     guard = sub.add_parser("guard", help="check for missed Memographix agent usage")
@@ -91,7 +101,12 @@ def main(argv: list[str] | None = None) -> None:
 
     repair = sub.add_parser("repair", help="repair Memographix local integration config")
     repair.add_argument("--mcp", action="store_true", required=True)
+    repair.add_argument("--agents", default="all")
     repair.add_argument("--json", action="store_true")
+
+    heal = sub.add_parser("heal", help="self-heal Memographix setup and MCP integrations")
+    heal.add_argument("--agents", default="all")
+    heal.add_argument("--json", action="store_true")
 
     serve_cmd = sub.add_parser("serve", help="start MCP stdio server or JSONL fallback")
     serve_cmd.add_argument("--jsonl", action="store_true", help="force JSONL fallback server")
@@ -185,32 +200,58 @@ def main(argv: list[str] | None = None) -> None:
         if stats.skipped_sensitive:
             print(f"Skipped {stats.skipped_sensitive} sensitive file(s)")
     elif args.cmd in {"ask", "recall"}:
-        packet = ws.context(args.question, budget=args.budget, refresh=True, record_event=True)
+        packet = ws.resolve(
+            args.question,
+            budget=args.budget,
+            refresh=True,
+            record_event=True,
+            source="cli",
+            agent="cli",
+        )
         if args.json:
-            print(json.dumps(packet.to_dict(), indent=2))
+            print(json.dumps(packet, indent=2))
         else:
-            print(f"status: {packet.status.value}")
-            print(f"summary: {packet.summary}")
-            print(f"estimated_tokens: {packet.estimated_tokens}/{packet.token_budget}")
-            if packet.warnings:
+            print(f"repo_root: {packet['repo_root']}")
+            print(f"event_id: {packet['event_id']}")
+            print(f"status: {packet['status']}")
+            print(f"summary: {packet['summary']}")
+            print(f"estimated_tokens: {packet['estimated_tokens']}/{packet['token_budget']}")
+            if packet["warnings"]:
                 print("warnings:")
-                for warning in packet.warnings:
+                for warning in packet["warnings"]:
                     print(f"- {warning}")
             print()
-            print(packet.context)
+            print(packet["context"])
     elif args.cmd == "remember":
         try:
             validation = json.loads(args.validation)
         except json.JSONDecodeError as exc:
             print(f"invalid --validation JSON: {exc}", file=sys.stderr)
             raise SystemExit(2) from exc
-        task_id = ws.remember(
+        commands = list(args.commands or [])
+        tests = list(args.tests or [])
+        if validation:
+            commands.extend(str(item) for item in validation.get("commands", []) or [])
+            tests.extend(str(item) for item in validation.get("tests", []) or [])
+        outcome = args.outcome or str(validation.get("outcome", "") or "")
+        result = ws.capture(
             args.question,
             args.answer,
             evidence=args.evidence,
-            validation=validation,
+            commands=commands,
+            tests=tests,
+            outcome=outcome,
+            resolve_event_id=args.resolve_event_id,
+            source="cli",
+            agent=args.agent,
         )
-        print(f"Remembered task {task_id}")
+        if args.json:
+            print(json.dumps(result, indent=2))
+        elif result["saved"]:
+            print(f"Remembered task {result['task_id']}")
+            print(result["final_status_line"])
+        else:
+            print(result["final_status_line"])
     elif args.cmd == "changed":
         stale = ws.changed()
         if not stale:
@@ -223,7 +264,7 @@ def main(argv: list[str] | None = None) -> None:
     elif args.cmd == "stats":
         print(json.dumps(ws.stats(), indent=2))
     elif args.cmd == "doctor":
-        result = ws.doctor(live=args.live)
+        result = ws.doctor(live=args.live, repair=args.repair)
         if args.json:
             print(json.dumps(result, indent=2))
         else:
@@ -264,6 +305,16 @@ def main(argv: list[str] | None = None) -> None:
                 if not live["ok"]:
                     reason = live.get("reason") or live.get("stderr") or "failed"
                     print(f"live_check_reason: {reason}")
+            if args.repair:
+                print(f"repaired: {result['repaired']}")
+                if result["repair_actions"]:
+                    print("repair_actions:")
+                    for action in result["repair_actions"]:
+                        print(f"- {action}")
+                if result["remaining_issues"]:
+                    print("remaining_issues:")
+                    for issue in result["remaining_issues"]:
+                        print(f"- {issue}")
             print(f"stats: {json.dumps(result['stats'], sort_keys=True)}")
             for item in result["integrations"]:
                 status = "ready" if item["ready"] else "needs review"
@@ -285,6 +336,17 @@ def main(argv: list[str] | None = None) -> None:
             print(f"captures_saved: {result['captures_saved']}")
             print(f"skipped_captures: {result['skipped_captures']}")
             print(f"estimated_saved_tokens: {result['estimated_saved_tokens']}")
+            if result.get("capture_events_by_source"):
+                source_counts = json.dumps(
+                    result["capture_events_by_source"],
+                    sort_keys=True,
+                )
+                print(f"capture_events_by_source: {source_counts}")
+            if result.get("legacy_tasks_without_capture_events"):
+                print(
+                    "legacy_tasks_without_capture_events: "
+                    f"{result['legacy_tasks_without_capture_events']}"
+                )
             if result.get("diagnostic"):
                 print()
                 print(result["diagnostic"])
@@ -300,9 +362,20 @@ def main(argv: list[str] | None = None) -> None:
                     print(f"- {warning}")
     elif args.cmd == "verify-agent":
         if args.json:
-            result = ws.verify_agent(agent=args.agent, wait_seconds=args.wait)
+            result = ws.verify_agent(
+                agent=args.agent,
+                wait_seconds=args.wait,
+                repair=args.repair,
+            )
             print(json.dumps(result, indent=2))
         else:
+            if args.repair:
+                repair_result = ws.heal(agents=args.agent)
+                print("Memographix repair complete.")
+                if repair_result["remaining_issues"]:
+                    print("remaining_issues:")
+                    for issue in repair_result["remaining_issues"]:
+                        print(f"- {issue}")
             started = ws.start_agent_verification(agent=args.agent)
             print("Memographix agent verification")
             print(f"agent: {started['agent']}")
@@ -357,14 +430,27 @@ def main(argv: list[str] | None = None) -> None:
             for item in result["repos"]:
                 print(f"{item['name']}: {item['root']}")
     elif args.cmd == "repair":
-        result = ws.repair_mcp()
+        result = ws.repair_mcp(agents=args.agents)
         if args.json:
             print(json.dumps(result, indent=2))
         else:
             print(f"Removed {result['removed_entries']} stale Memographix MCP entrie(s).")
+            print(f"Refreshed {result['refreshed_entries']} Memographix MCP entrie(s).")
             for action in result["actions"]:
                 if action["removed"]:
                     print(f"- {action['path']}: {', '.join(action['removed'])}")
+    elif args.cmd == "heal":
+        result = ws.heal(agents=args.agents)
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            print("Memographix heal complete.")
+            print(f"ok: {result['ok']}")
+            print(f"agents: {', '.join(result['agents'])}")
+            if result["remaining_issues"]:
+                print("remaining_issues:")
+                for issue in result["remaining_issues"]:
+                    print(f"- {issue}")
     elif args.cmd == "serve":
         if args.jsonl:
             from .mcp import serve_jsonl

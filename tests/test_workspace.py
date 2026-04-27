@@ -123,6 +123,8 @@ def test_capture_and_savings_events(tmp_path: Path) -> None:
     assert savings["fresh_hits"] == 1
     assert savings["captures_saved"] == 1
     assert savings["skipped_captures"] == 1
+    assert savings["capture_events_by_source"]["api"] == 2
+    assert savings["legacy_tasks_without_capture_events"] == 0
 
 
 def test_repo_control_disable_enable_preserves_memory_and_reindexes(tmp_path: Path) -> None:

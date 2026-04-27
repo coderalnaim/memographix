@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from . import __version__
+from .integrations import current_mgx_command
 from .registry import _configured_ancestor, list_registered_repos, resolve_repo
 from .workspace import Workspace
 
@@ -163,6 +165,15 @@ def tool_activation_status(root: str, repo: str | None = None) -> dict[str, Any]
         "last_verified_agent_at": verification.get("last_verified_agent_at", ""),
         "last_verified_agent": verification.get("last_verified_agent", ""),
         "last_unverified_warning": verification.get("last_unverified_warning", ""),
+        "repair_command": f'mgx --root "{workspace.root}" doctor --live --repair',
+        "cli_fallback_ask": f'mgx --root "{workspace.root}" ask "<task>" --budget 800',
+        "cli_fallback_capture_template": (
+            f'mgx --root "{workspace.root}" remember --question "<task>" '
+            '--answer "<final answer>" --evidence <repo-local evidence files> '
+            '--commands <commands run> --tests <tests run> --outcome "<outcome>"'
+        ),
+        "configured_mgx_command": current_mgx_command(),
+        "installed_version": __version__,
     }
 
 

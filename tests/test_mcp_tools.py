@@ -120,6 +120,9 @@ def test_global_router_resolves_registered_repo_by_alias(tmp_path: Path) -> None
     assert status["repo_root"] == str(repo)
     assert status["strict_mode"] is True
     assert status["agent_verified"] is False
+    assert status["repair_command"] == f'mgx --root "{repo}" doctor --live --repair'
+    assert status["cli_fallback_ask"] == f'mgx --root "{repo}" ask "<task>" --budget 800'
+    assert status["installed_version"]
     packet = tool_resolve_task(
         str(tmp_path),
         "Explain the support agent frontend main entrypoint.",

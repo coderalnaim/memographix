@@ -20,7 +20,8 @@ def integration_status(root: Path) -> list[dict[str, Any]]:
     return [_status_for_agent(root, agent) for agent in SUPPORTED_AGENTS]
 
 
-def repair_mcp_configs(root: Path) -> dict[str, Any]:
+def repair_mcp_configs(root: Path, agents: list[str] | None = None) -> dict[str, Any]:
+    selected = list(agents or SUPPORTED_AGENTS)
     actions = [_repair_codex_config(root)]
     for path, section in (
         (root / ".mcp.json", "mcpServers"),
@@ -31,12 +32,17 @@ def repair_mcp_configs(root: Path) -> dict[str, Any]:
         (_windsurf_config_path(), "mcpServers"),
     ):
         actions.append(_repair_json_config(path, section))
+    rewritten = [_install_agent(root, agent) for agent in selected]
     removed = sum(len(item.get("removed", [])) for item in actions)
+    refreshed = sum(1 for item in rewritten if item.get("updated"))
     return {
         "root": str(root),
         "removed_entries": removed,
+        "refreshed_entries": refreshed,
         "actions": actions,
+        "rewritten": rewritten,
         "integrations": integration_status(root),
+        "configured_mgx_command": current_mgx_command(),
     }
 
 
@@ -164,7 +170,6 @@ def _write_codex_config(root: Path) -> dict[str, Any]:
     header = f"[mcp_servers.{server_name}]"
     block = "\n".join(
         [
-            "",
             header,
             f"command = {_toml_string(_mgx_command())}",
             f"args = [{_toml_string('serve')}]",
@@ -172,10 +177,21 @@ def _write_codex_config(root: Path) -> dict[str, Any]:
         ]
     )
     if header not in existing:
-        path.write_text(existing.rstrip() + block, encoding="utf-8")
+        prefix = existing.rstrip()
+        path.write_text((prefix + "\n\n" if prefix else "") + block, encoding="utf-8")
         updated = True
     else:
+        blocks = _split_toml_blocks(existing)
+        next_blocks: list[str] = []
         updated = False
+        for candidate_header, candidate_block in blocks:
+            if candidate_header == header:
+                updated = candidate_block.strip() != block.strip()
+                next_blocks.append(block)
+            else:
+                next_blocks.append(candidate_block)
+        rendered = "\n".join(item.strip() for item in next_blocks if item.strip()) + "\n"
+        path.write_text(rendered, encoding="utf-8")
     result = _integration_result(
         root, "codex", mode="mcp", path=path, registered=True, updated=updated
     )
@@ -186,11 +202,17 @@ def _write_codex_config(root: Path) -> dict[str, Any]:
 
 def _codex_status(root: Path) -> dict[str, Any]:
     path = _codex_config_path()
-    registered = path.exists() and f"[mcp_servers.{mcp_server_name(root)}]" in path.read_text(
-        encoding="utf-8"
-    )
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    registered = f"[mcp_servers.{mcp_server_name(root)}]" in text
+    command = _extract_codex_command(text, mcp_server_name(root)) if registered else ""
     result = _integration_result(
-        root, "codex", mode="mcp", path=path, registered=registered, updated=False
+        root,
+        "codex",
+        mode="mcp",
+        path=path,
+        registered=registered,
+        updated=False,
+        configured_command=command,
     )
     result["skill_path"] = str(codex_skill_path())
     result["skill_installed"] = codex_skill_installed()
@@ -202,7 +224,8 @@ def _codex_status(root: Path) -> dict[str, Any]:
 
 def _json_status(root: Path, agent: str, path: Path, section: str) -> dict[str, Any]:
     data, error = _load_json(path)
-    registered = False if error else mcp_server_name(root) in data.get(section, {})
+    server = {} if error else data.get(section, {}).get(mcp_server_name(root), {})
+    registered = bool(server) if not error else False
     return _integration_result(
         root,
         agent,
@@ -211,12 +234,14 @@ def _json_status(root: Path, agent: str, path: Path, section: str) -> dict[str, 
         registered=registered,
         updated=False,
         reason=error or "",
+        configured_command=_server_command_value(server),
     )
 
 
 def _opencode_status(root: Path) -> dict[str, Any]:
     data, error = _load_json(root / "opencode.json")
-    registered = False if error else mcp_server_name(root) in data.get("mcp", {})
+    server = {} if error else data.get("mcp", {}).get(mcp_server_name(root), {})
+    registered = bool(server) if not error else False
     return _integration_result(
         root,
         "opencode",
@@ -225,6 +250,7 @@ def _opencode_status(root: Path) -> dict[str, Any]:
         registered=registered,
         updated=False,
         reason=error or "",
+        configured_command=_server_command_value(server),
     )
 
 
@@ -249,6 +275,7 @@ def _integration_result(
     registered: bool,
     updated: bool,
     reason: str = "",
+    configured_command: str = "",
 ) -> dict[str, Any]:
     return {
         "agent": agent,
@@ -259,6 +286,7 @@ def _integration_result(
         "updated": updated,
         "path": str(path),
         "reason": reason,
+        "configured_command": configured_command,
     }
 
 
@@ -379,6 +407,32 @@ def _mgx_command() -> str:
     if current.name in {"mgx", "memographix"} and current.exists():
         return str(current.resolve())
     return shutil.which("mgx") or "mgx"
+
+
+def current_mgx_command() -> str:
+    return _mgx_command()
+
+
+def _server_command_value(server: Any) -> str:
+    if not isinstance(server, dict):
+        return ""
+    command = server.get("command")
+    if isinstance(command, list):
+        return " ".join(str(item) for item in command)
+    if isinstance(command, str):
+        return command
+    return ""
+
+
+def _extract_codex_command(text: str, server_name: str) -> str:
+    header = f"[mcp_servers.{server_name}]"
+    blocks = _split_toml_blocks(text)
+    for candidate_header, block in blocks:
+        if candidate_header != header:
+            continue
+        match = re.search(r'(?m)^\s*command\s*=\s*["\']?([^"\'\n]+)', block)
+        return match.group(1).strip() if match else ""
+    return ""
 
 
 def _toml_string(value: str) -> str:

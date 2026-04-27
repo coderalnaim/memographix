@@ -16,6 +16,11 @@ def test_cli_index_ask_remember(tmp_path: Path, capsys) -> None:
     main(["--root", str(tmp_path), "ask", "runtime service", "--json"])
     packet = json.loads(capsys.readouterr().out)
     assert packet["status"] == "new"
+    assert packet["repo_root"] == str(tmp_path)
+    assert packet["event_id"] is not None
+
+    main(["--root", str(tmp_path), "setup", "--agents", "codex"])
+    capsys.readouterr()
 
     main(
         [
@@ -28,9 +33,22 @@ def test_cli_index_ask_remember(tmp_path: Path, capsys) -> None:
             "RuntimeService is in service.py.",
             "--evidence",
             "service.py",
+            "--resolve-event-id",
+            str(packet["event_id"]),
+            "--commands",
+            "pytest -q",
+            "--outcome",
+            "saved",
         ]
     )
-    assert "Remembered task" in capsys.readouterr().out
+    remember_out = capsys.readouterr().out
+    assert "Remembered task" in remember_out
+    assert "Memographix: saved task memory" in remember_out
+
+    main(["--root", str(tmp_path), "savings", "--json"])
+    savings = json.loads(capsys.readouterr().out)
+    assert savings["captures_saved"] == 1
+    assert savings["capture_events_by_source"]["cli"] == 1
 
     main(["--root", str(tmp_path), "ask", "runtime service", "--json"])
     repeated = json.loads(capsys.readouterr().out)
@@ -63,6 +81,7 @@ def test_cli_setup_doctor_and_savings(tmp_path: Path, capsys, monkeypatch) -> No
     assert codex_skill.exists()
     assert "description: >" in codex_skill.read_text(encoding="utf-8")
     assert "capture_task" in codex_skill.read_text(encoding="utf-8")
+    assert "doctor --live --repair" in codex_skill.read_text(encoding="utf-8")
 
     main(["--root", str(tmp_path), "doctor", "--live", "--json"])
     doctor = json.loads(capsys.readouterr().out)
@@ -77,6 +96,7 @@ def test_cli_setup_doctor_and_savings(tmp_path: Path, capsys, monkeypatch) -> No
     assert doctor["live"]["ok"] is True
     assert doctor["live"]["dry_run_resolve_verified"] is True
     assert doctor["activation"]["agent_verified"] is False
+    assert doctor["remaining_issues"] == []
 
     main(["--root", str(tmp_path), "savings", "--json"])
     savings = json.loads(capsys.readouterr().out)
@@ -87,12 +107,30 @@ def test_cli_setup_doctor_and_savings(tmp_path: Path, capsys, monkeypatch) -> No
     main(["--root", str(tmp_path), "repos", "--json"])
     repos = json.loads(capsys.readouterr().out)
     assert repos["repos"][0]["root"] == str(tmp_path)
+    assert repos["repos"][0]["files"] >= 1
+    assert repos["repos"][0]["resolve_events"] == 0
 
     main(["--root", str(tmp_path), "verify-agent", "--agent", "codex", "--wait", "0", "--json"])
     verification = json.loads(capsys.readouterr().out)
     assert verification["verified"] is False
     assert verification["verification_id"].startswith("mgx-verify-")
     assert "resolve_task" in verification["prompt"]
+
+    main(
+        [
+            "--root",
+            str(tmp_path),
+            "verify-agent",
+            "--agent",
+            "codex",
+            "--repair",
+            "--wait",
+            "0",
+            "--json",
+        ]
+    )
+    verification_with_repair = json.loads(capsys.readouterr().out)
+    assert verification_with_repair["repair"]["ok"] is True
 
     main(["--root", str(tmp_path), "guard", "--json"])
     guard = json.loads(capsys.readouterr().out)
@@ -148,6 +186,8 @@ def test_setup_writes_supported_mcp_integrations(tmp_path: Path, monkeypatch) ->
         assert "Before reading files" in text
         assert "capture_task" in text
         assert "Memographix: saved task memory" in text
+        assert f'mgx --root "{tmp_path}" doctor --live --repair' in text
+        assert f'mgx --root "{tmp_path}" ask "<user task>" --budget 800' in text
 
 
 def test_setup_replaces_old_memographix_agent_rules(tmp_path: Path, monkeypatch) -> None:
@@ -199,9 +239,44 @@ def test_repair_mcp_flags_duplicate_memographix_servers(
     main(["--root", str(tmp_path), "repair", "--mcp", "--json"])
     result = json.loads(capsys.readouterr().out)
     assert result["removed_entries"] >= 1
+    assert "rewritten" in result
+    assert result["configured_mgx_command"]
     text = codex_config.read_text(encoding="utf-8")
     assert "[mcp_servers.memographix]" in text
     assert "memographix_old" not in text
+
+
+def test_cli_heal_is_idempotent_and_doctor_repair(tmp_path: Path, capsys, monkeypatch) -> None:
+    codex_config = tmp_path / "codex-config.toml"
+    monkeypatch.setenv("MEMOGRAPHIX_CODEX_CONFIG", str(codex_config))
+    (tmp_path / "service.py").write_text("def handle():\n    return True\n", encoding="utf-8")
+
+    main(["--root", str(tmp_path), "heal", "--agents", "codex,cursor", "--json"])
+    first = json.loads(capsys.readouterr().out)
+    assert first["ok"] is True
+    assert first["agents"] == ["codex", "cursor"]
+    cursor_config_path = tmp_path / ".cursor" / "mcp.json"
+    assert cursor_config_path.exists()
+    cursor_config = json.loads(cursor_config_path.read_text(encoding="utf-8"))
+    cursor_config["mcpServers"]["memographix"]["command"] = "/tmp/stale-mgx"
+    cursor_config_path.write_text(json.dumps(cursor_config), encoding="utf-8")
+
+    codex_config.write_text(
+        codex_config.read_text(encoding="utf-8")
+        + "\n[mcp_servers.memographix_stale]\ncommand = \"old-mgx\"\nargs = [\"serve\"]\n",
+        encoding="utf-8",
+    )
+    main(["--root", str(tmp_path), "doctor", "--live", "--repair", "--json"])
+    repaired = json.loads(capsys.readouterr().out)
+    assert repaired["live"]["ok"] is True
+    assert "memographix_stale" not in codex_config.read_text(encoding="utf-8")
+    cursor_config = json.loads(cursor_config_path.read_text(encoding="utf-8"))
+    assert cursor_config["mcpServers"]["memographix"]["command"] != "/tmp/stale-mgx"
+    assert repaired["remaining_issues"] == []
+
+    main(["--root", str(tmp_path), "heal", "--agents", "codex,cursor", "--json"])
+    second = json.loads(capsys.readouterr().out)
+    assert second["ok"] is True
 
 
 def test_cli_enable_disable_status(tmp_path: Path, capsys, monkeypatch) -> None:

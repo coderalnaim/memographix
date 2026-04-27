@@ -11,7 +11,12 @@ from .activation import live_activation_check
 from .agent import SUPPORTED_AGENTS, install_agent_rules
 from .config import ensure_repo_config, load_repo_control, update_repo_control
 from .engine import IndexStats, LocalEngine
-from .integrations import install_mcp_integrations, integration_status, repair_mcp_configs
+from .integrations import (
+    current_mgx_command,
+    install_mcp_integrations,
+    integration_status,
+    repair_mcp_configs,
+)
 from .models import ContextPacket, TaskMemory
 from .registry import list_registered_repos, register_repo
 
@@ -130,6 +135,33 @@ class Workspace:
             agent=agent,
         )
         return packet
+
+    def resolve(
+        self,
+        question: str,
+        budget: int = 800,
+        *,
+        refresh: bool = False,
+        record_event: bool = False,
+        source: str = "api",
+        verification_id: str = "",
+        agent: str = "",
+    ) -> dict[str, Any]:
+        packet, event_id = self._context_with_event(
+            question,
+            budget=budget,
+            refresh=refresh,
+            record_event=record_event,
+            source=source,
+            verification_id=verification_id,
+            agent=agent,
+        )
+        data = packet.to_dict()
+        data["repo_root"] = str(self.root)
+        data["event_id"] = event_id
+        data["verification_id"] = verification_id
+        data["source"] = source
+        return data
 
     def _context_with_event(
         self,
@@ -313,7 +345,14 @@ class Workspace:
             "last_capture_status": verification["last_capture_status"],
         }
 
-    def verify_agent(self, agent: str = "codex", wait_seconds: int = 120) -> dict[str, Any]:
+    def verify_agent(
+        self,
+        agent: str = "codex",
+        wait_seconds: int = 120,
+        *,
+        repair: bool = False,
+    ) -> dict[str, Any]:
+        repair_result = self.heal(agents=agent) if repair else None
         started = self.start_agent_verification(agent=agent)
         result = self.wait_agent_verification(
             started["verification_id"],
@@ -321,6 +360,8 @@ class Workspace:
             wait_seconds=wait_seconds,
         )
         result["prompt"] = started["prompt"]
+        if repair_result is not None:
+            result["repair"] = repair_result
         return result
 
     def guard(self, since_hours: int = 24) -> dict[str, Any]:
@@ -459,7 +500,7 @@ class Workspace:
         data["dry_run"] = dry_run
         return data
 
-    def doctor(self, *, live: bool = False) -> dict[str, Any]:
+    def _doctor_snapshot(self, *, live: bool = False) -> dict[str, Any]:
         try:
             from . import _native  # noqa: F401
 
@@ -530,11 +571,99 @@ class Workspace:
             result["live"] = live_activation_check(self.root)
         return result
 
-    def repos(self) -> list[dict[str, Any]]:
-        return list_registered_repos()
+    def doctor(self, *, live: bool = False, repair: bool = False) -> dict[str, Any]:
+        result = self._doctor_snapshot(live=live)
+        result["repaired"] = False
+        result["repair_actions"] = []
+        result["remaining_issues"] = _doctor_remaining_issues(result)
+        if not repair:
+            return result
 
-    def repair_mcp(self) -> dict[str, Any]:
-        return repair_mcp_configs(self.root)
+        selected = ",".join(result["setup_agents"] or list(SUPPORTED_AGENTS))
+        repair_result = self.heal(agents=selected, run_doctor=False)
+        result = self._doctor_snapshot(live=live)
+        result["repaired"] = bool(
+            repair_result.get("setup", {}).get("config_written")
+            or repair_result.get("repair", {}).get("removed_entries")
+            or repair_result.get("repair", {}).get("refreshed_entries")
+        )
+        result["repair_actions"] = repair_result["actions"]
+        result["repair"] = repair_result
+        result["remaining_issues"] = _doctor_remaining_issues(result)
+        return result
+
+    def repos(self) -> list[dict[str, Any]]:
+        repos = []
+        for item in list_registered_repos():
+            enriched = dict(item)
+            root = Path(str(item.get("root", ""))).resolve()
+            db_path = root / ".memographix" / "graph.sqlite"
+            if db_path.exists():
+                repo_ws = Workspace.open(root)
+                stats = repo_ws.stats()
+                savings = repo_ws.savings()
+                enriched.update(
+                    {
+                        "files": stats["files"],
+                        "tasks": stats["tasks"],
+                        "resolve_events": savings.get("resolve_events", 0),
+                        "capture_events": savings.get("captures_saved", 0)
+                        + savings.get("skipped_captures", 0),
+                        "last_resolve_at": savings.get("last_resolve_at", ""),
+                        "last_capture_at": savings.get("last_capture_at", ""),
+                    }
+                )
+            else:
+                enriched.update(
+                    {
+                        "files": 0,
+                        "tasks": 0,
+                        "resolve_events": 0,
+                        "capture_events": 0,
+                        "last_resolve_at": "",
+                        "last_capture_at": "",
+                    }
+                )
+            repos.append(enriched)
+        return repos
+
+    def repair_mcp(self, agents: str = "all") -> dict[str, Any]:
+        selected_agents = _parse_agents(agents)
+        installed = []
+        for agent in selected_agents:
+            path = install_agent_rules(self.root, agent)
+            installed.append({"agent": agent, "path": str(path)})
+        mcp_config = self._write_mcp_config()
+        registry = register_repo(self.root)
+        repair = repair_mcp_configs(self.root, selected_agents)
+        repair["agents"] = installed
+        repair["mcp_config"] = str(mcp_config)
+        repair["registry"] = registry
+        return repair
+
+    def heal(self, agents: str = "all", *, run_doctor: bool = True) -> dict[str, Any]:
+        selected_agents = _parse_agents(agents)
+        actions = [
+            "setup",
+            "repair_mcp",
+            "register_repo",
+            "install_agent_rules",
+            "rewrite_mcp_configs",
+        ]
+        setup = self.setup(agents=",".join(selected_agents))
+        repair = self.repair_mcp(agents=",".join(selected_agents))
+        doctor = self._doctor_snapshot(live=True) if run_doctor else {}
+        remaining_issues = _doctor_remaining_issues(doctor) if doctor else []
+        return {
+            "root": str(self.root),
+            "agents": selected_agents,
+            "actions": actions,
+            "setup": setup,
+            "repair": repair,
+            "doctor": doctor,
+            "remaining_issues": remaining_issues,
+            "ok": not remaining_issues,
+        }
 
     def export_json(self) -> dict:
         return self.engine.export_json()
@@ -550,7 +679,7 @@ class Workspace:
         data = {
             "mcpServers": {
                 "memographix": {
-                    "command": "mgx",
+                    "command": current_mgx_command(),
                     "args": ["--root", str(self.root), "serve"],
                 }
             }
@@ -567,6 +696,24 @@ def _parse_agents(agents: str) -> list[str]:
     if unknown:
         raise ValueError(f"unknown agent(s): {', '.join(unknown)}")
     return selected
+
+
+def _doctor_remaining_issues(result: dict[str, Any]) -> list[str]:
+    if not result:
+        return []
+    issues: list[str] = []
+    if not result.get("configured"):
+        issues.append("repo_not_configured")
+    if not result.get("setup_completed"):
+        issues.append("setup_not_completed")
+    if not result.get("registry_registered"):
+        issues.append("repo_not_registered")
+    if result.get("manual_mcp_config_required"):
+        issues.append("mcp_integration_missing_or_stale")
+    live = result.get("live")
+    if isinstance(live, dict) and not live.get("ok"):
+        issues.append("live_mcp_check_failed")
+    return issues
 
 
 def _agent_rule_path(root: Path, agent: str) -> Path:

@@ -185,7 +185,7 @@ dependencies = [
 
 [[package]]
 name = "memographix-core"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "globset",
  "ignore",

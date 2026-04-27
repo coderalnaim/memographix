@@ -24,10 +24,17 @@ exploration, debugging, implementation, review, README/doc edit, or test work:
 
 - Before reading files, running repo commands, or answering, call the
   `resolve_task` MCP tool with the user's task.
-- Always pass `repo` as this repo's absolute path when the path is known. If the
-  chat is not opened from this repo, pass the repo name/path when the user
-  mentions it.
-- If MCP is unavailable, run `mgx ask "<user task>" --budget 800`.
+- Always pass `repo` as this repo's absolute path:
+  `{repo_root}`.
+- If MCP tools are missing or the MCP call fails, self-repair without asking the
+  user first by running:
+  `mgx --root "{repo_root}" doctor --live --repair`
+- After repair, retry MCP once. If MCP still cannot be used, fall back to the
+  explicit CLI commands:
+  `mgx --root "{repo_root}" ask "<user task>" --budget 800`
+  and after work:
+  `mgx --root "{repo_root}" remember --question "<user task>" --answer "<final answer>"`
+  with `--evidence`, `--commands`, `--tests`, and `--outcome` as available.
 - After useful repo work, call the `capture_task` MCP tool with the final
   answer, changed files, commands, tests, outcome, and the `resolve_event_id`
   and `repo_root` returned by `resolve_task` when available.
@@ -43,6 +50,9 @@ Rules:
   or `repo not configured`, continue normally without Memographix context and do
   not call `capture_task`.
 - Do not ask the developer to manually save memory unless automatic capture fails.
+- It is safe to run `mgx --root "{repo_root}" doctor --live --repair` or
+  `mgx --root "{repo_root}" heal` without asking; both commands are repo-local,
+  idempotent, and do not delete memory.
 - Do not say task memory was saved unless `capture_task` returns `saved: true`.
 - Never treat stale memory as authoritative.
 - If `resolve_task` succeeded but `capture_task` returns `repo not configured`,
@@ -74,14 +84,23 @@ them.
    user's task. Always pass `repo` as the absolute repository root when it is
    known. Pass the repo name/path when the user names a repo or when the chat is
    not clearly opened inside the repo.
-3. Use the returned context only when Memographix reports it is enabled and
+3. If MCP tools are missing or the MCP call fails, run
+   `mgx --root "<absolute repo root>" doctor --live --repair` without asking the
+   user first, then retry MCP once. This repair command is repo-local,
+   idempotent, and does not delete memory.
+4. If MCP still cannot be used after repair, use the explicit CLI fallback:
+   `mgx --root "<absolute repo root>" ask "<user task>" --budget 800`.
+5. Use the returned context only when Memographix reports it is enabled and
    fresh. If it is disabled or not configured, continue normally without
    Memographix context.
-4. After useful repo work, call `capture_task` with the answer, changed files,
+6. After useful repo work, call `capture_task` with the answer, changed files,
    evidence, commands, tests, outcome, and the `resolve_event_id` returned by
    `resolve_task` when available. Also pass `repo` as the `repo_root` returned by
    `resolve_task`.
-5. End the final answer with exactly the `final_status_line` returned by
+7. If MCP capture is still unavailable after repair, use
+   `mgx --root "<absolute repo root>" remember --question "<user task>" --answer "<final answer>"`
+   with `--evidence`, `--commands`, `--tests`, and `--outcome` as available.
+8. End the final answer with exactly the `final_status_line` returned by
    `capture_task`. If capture was not attempted because the repo is disabled or
    not configured, use the corresponding Memographix disabled/not-saved status.
 
@@ -95,6 +114,7 @@ MEMOGRAPHIX_HEADING_RE = re.compile(r"(?m)^# Memographix\s*$")
 
 def install_agent_rules(root: Path, agent: str) -> Path:
     agent = agent.lower()
+    rules = render_agent_rules(root)
     if agent == "codex":
         path = root / "AGENTS.md"
         install_codex_skill()
@@ -105,7 +125,7 @@ def install_agent_rules(root: Path, agent: str) -> Path:
     elif agent == "cursor":
         path = root / ".cursor" / "rules" / "memographix.mdc"
         path.parent.mkdir(parents=True, exist_ok=True)
-        content = "---\nalwaysApply: true\n---\n\n" + AGENT_RULES
+        content = "---\nalwaysApply: true\n---\n\n" + rules
         path.write_text(content, encoding="utf-8")
         return path
     elif agent == "copilot":
@@ -117,7 +137,7 @@ def install_agent_rules(root: Path, agent: str) -> Path:
         raise ValueError(f"unknown agent: {agent}")
 
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
-    path.write_text(_merge_agent_rules(existing), encoding="utf-8")
+    path.write_text(_merge_agent_rules(existing, rules), encoding="utf-8")
     return path
 
 
@@ -138,13 +158,17 @@ def codex_skill_installed() -> bool:
     return path.exists() and "name: memographix" in path.read_text(encoding="utf-8")
 
 
-def _merge_agent_rules(existing: str) -> str:
+def render_agent_rules(root: Path) -> str:
+    return AGENT_RULES.format(repo_root=str(root.resolve()))
+
+
+def _merge_agent_rules(existing: str, rules: str) -> str:
     match = MEMOGRAPHIX_HEADING_RE.search(existing)
     if not match:
-        return (existing.rstrip() + "\n\n" + AGENT_RULES).lstrip()
+        return (existing.rstrip() + "\n\n" + rules).lstrip()
     next_heading = re.search(r"(?m)^# (?!Memographix\s*$).+$", existing[match.end() :])
     end = match.end() + next_heading.start() if next_heading else len(existing)
-    merged = existing[: match.start()].rstrip() + "\n\n" + AGENT_RULES
+    merged = existing[: match.start()].rstrip() + "\n\n" + rules
     if existing[end:].strip():
         merged += "\n\n" + existing[end:].lstrip()
     return merged.lstrip()

@@ -87,6 +87,15 @@ def _install_smoke(dist: Path) -> None:
         python = bin_dir / ("python.exe" if os.name == "nt" else "python")
         pip = bin_dir / ("pip.exe" if os.name == "nt" else "pip")
         mgx = bin_dir / ("mgx.exe" if os.name == "nt" else "mgx")
+        env = os.environ.copy()
+        env.update(
+            {
+                "MEMOGRAPHIX_HOME": str(root / "memographix-home"),
+                "MEMOGRAPHIX_CODEX_CONFIG": str(root / "codex-config.toml"),
+                "MEMOGRAPHIX_CODEX_SKILLS_DIR": str(root / "codex-skills"),
+                "MEMOGRAPHIX_WINDSURF_CONFIG": str(root / "windsurf-mcp.json"),
+            }
+        )
         subprocess.run(
             [
                 str(pip),
@@ -96,8 +105,9 @@ def _install_smoke(dist: Path) -> None:
                 f"memographix=={_project_version()}",
             ],
             check=True,
+            env=env,
         )
-        subprocess.run([str(pip), "check"], check=True)
+        subprocess.run([str(pip), "check"], check=True, env=env)
         repo = root / "repo"
         repo.mkdir()
         (repo / "app.py").write_text("def handle():\n    return True\n", encoding="utf-8")
@@ -105,24 +115,28 @@ def _install_smoke(dist: Path) -> None:
             [str(mgx), "--root", str(repo), "setup", "--agents", "codex"],
             check=True,
             stdout=subprocess.DEVNULL,
+            env=env,
         )
-        subprocess.run([str(mgx), "--root", str(repo), "status", "--json"], check=True)
+        subprocess.run([str(mgx), "--root", str(repo), "status", "--json"], check=True, env=env)
         subprocess.run(
             [str(mgx), "--root", str(repo), "disable", "--reason", "release smoke"],
             check=True,
             stdout=subprocess.DEVNULL,
+            env=env,
         )
         subprocess.run(
             [str(mgx), "--root", str(repo), "enable"],
             check=True,
             stdout=subprocess.DEVNULL,
+            env=env,
         )
         subprocess.run(
             [str(mgx), "--root", str(repo), "ask", "how does handle work?", "--json"],
             check=True,
+            env=env,
         )
-        subprocess.run([str(mgx), "--root", str(repo), "savings", "--json"], check=True)
-        subprocess.run([str(python), "-c", "import memographix"], check=True)
+        subprocess.run([str(mgx), "--root", str(repo), "savings", "--json"], check=True, env=env)
+        subprocess.run([str(python), "-c", "import memographix"], check=True, env=env)
 
 
 def _project_version() -> str:
