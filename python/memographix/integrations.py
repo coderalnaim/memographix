@@ -20,6 +20,26 @@ def integration_status(root: Path) -> list[dict[str, Any]]:
     return [_status_for_agent(root, agent) for agent in SUPPORTED_AGENTS]
 
 
+def repair_mcp_configs(root: Path) -> dict[str, Any]:
+    actions = [_repair_codex_config(root)]
+    for path, section in (
+        (root / ".mcp.json", "mcpServers"),
+        (root / ".cursor" / "mcp.json", "mcpServers"),
+        (root / ".vscode" / "mcp.json", "servers"),
+        (root / ".gemini" / "settings.json", "mcpServers"),
+        (root / "opencode.json", "mcp"),
+        (_windsurf_config_path(), "mcpServers"),
+    ):
+        actions.append(_repair_json_config(path, section))
+    removed = sum(len(item.get("removed", [])) for item in actions)
+    return {
+        "root": str(root),
+        "removed_entries": removed,
+        "actions": actions,
+        "integrations": integration_status(root),
+    }
+
+
 def _install_agent(root: Path, agent: str) -> dict[str, Any]:
     if agent == "codex":
         return _write_codex_config(root)
@@ -34,7 +54,7 @@ def _install_agent(root: Path, agent: str) -> dict[str, Any]:
     if agent == "opencode":
         return _write_opencode_json(root)
     if agent == "windsurf":
-        return _write_mcp_servers_json(root, agent, _windsurf_config_path())
+        return _write_global_mcp_servers_json(root, agent, _windsurf_config_path())
     return _rules_only_status(root, agent)
 
 
@@ -63,6 +83,17 @@ def _write_mcp_servers_json(root: Path, agent: str, path: Path) -> dict[str, Any
         path=path,
         section="mcpServers",
         server=_stdio_server(root),
+        mode="mcp",
+    )
+
+
+def _write_global_mcp_servers_json(root: Path, agent: str, path: Path) -> dict[str, Any]:
+    return _merge_json_server(
+        root=root,
+        agent=agent,
+        path=path,
+        section="mcpServers",
+        server=_global_stdio_server(),
         mode="mcp",
     )
 
@@ -135,9 +166,7 @@ def _write_codex_config(root: Path) -> dict[str, Any]:
             "",
             header,
             f"command = {_toml_string(_mgx_command())}",
-            "args = ["
-            f"{_toml_string('--root')}, {_toml_string(str(root))}, {_toml_string('serve')}"
-            "]",
+            f"args = [{_toml_string('serve')}]",
             "",
         ]
     )
@@ -235,6 +264,68 @@ def _load_json(path: Path) -> tuple[dict[str, Any], str]:
     return data, ""
 
 
+def _repair_json_config(path: Path, section: str) -> dict[str, Any]:
+    data, error = _load_json(path)
+    if error or not path.exists():
+        return {"path": str(path), "removed": [], "reason": error or "not present"}
+    servers = data.get(section)
+    if not isinstance(servers, dict):
+        return {"path": str(path), "removed": [], "reason": f"missing {section}"}
+    removed = [
+        key
+        for key in list(servers)
+        if _is_memographix_server_key(key) and key != "memographix"
+    ]
+    for key in removed:
+        servers.pop(key, None)
+    if removed:
+        path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return {"path": str(path), "removed": removed, "reason": ""}
+
+
+def _repair_codex_config(root: Path) -> dict[str, Any]:
+    path = _codex_config_path()
+    if not path.exists():
+        return {"path": str(path), "removed": [], "reason": "not present"}
+    text = path.read_text(encoding="utf-8")
+    blocks = _split_toml_blocks(text)
+    kept: list[str] = []
+    removed: list[str] = []
+    for header, block in blocks:
+        if header and _is_memographix_toml_header(header) and header != "[mcp_servers.memographix]":
+            removed.append(header.strip("[]").split(".", 1)[1])
+            continue
+        kept.append(block)
+    if removed:
+        path.write_text("".join(kept).rstrip() + "\n", encoding="utf-8")
+    return {"path": str(path), "removed": removed, "reason": ""}
+
+
+def _split_toml_blocks(text: str) -> list[tuple[str, str]]:
+    blocks: list[tuple[str, str]] = []
+    current_header = ""
+    current_lines: list[str] = []
+    for line in text.splitlines(keepends=True):
+        if line.startswith("[") and line.strip().endswith("]"):
+            if current_lines:
+                blocks.append((current_header, "".join(current_lines)))
+            current_header = line.strip()
+            current_lines = [line]
+        else:
+            current_lines.append(line)
+    if current_lines:
+        blocks.append((current_header, "".join(current_lines)))
+    return blocks
+
+
+def _is_memographix_toml_header(header: str) -> bool:
+    return header.startswith("[mcp_servers.memographix")
+
+
+def _is_memographix_server_key(key: str) -> bool:
+    return key == "memographix" or key.startswith("memographix_") or key.startswith("memographix-")
+
+
 def _stdio_server(root: Path) -> dict[str, Any]:
     return {
         "command": _mgx_command(),
@@ -242,7 +333,18 @@ def _stdio_server(root: Path) -> dict[str, Any]:
     }
 
 
+def _global_stdio_server() -> dict[str, Any]:
+    return {
+        "command": _mgx_command(),
+        "args": ["serve"],
+    }
+
+
 def mcp_server_name(root: Path) -> str:
+    return "memographix"
+
+
+def legacy_mcp_server_name(root: Path) -> str:
     slug = re.sub(r"[^a-z0-9_]+", "_", root.name.lower()).strip("_") or "repo"
     digest = hashlib.sha1(str(root).encode("utf-8")).hexdigest()[:8]
     return f"memographix_{slug}_{digest}"

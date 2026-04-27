@@ -5,11 +5,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .activation import live_activation_check
 from .agent import SUPPORTED_AGENTS, install_agent_rules
 from .config import ensure_repo_config, load_repo_control, update_repo_control
 from .engine import IndexStats, LocalEngine
-from .integrations import install_mcp_integrations, integration_status
+from .integrations import install_mcp_integrations, integration_status, repair_mcp_configs
 from .models import ContextPacket, TaskMemory
+from .registry import list_registered_repos, register_repo
 
 
 class Workspace:
@@ -44,6 +46,7 @@ class Workspace:
             },
         )
         stats = self.index()
+        registry = register_repo(self.root)
         installed = []
         for agent in selected_agents:
             path = install_agent_rules(self.root, agent)
@@ -61,6 +64,7 @@ class Workspace:
             "codex_mcp": codex_mcp,
             "agents": installed,
             "index": stats.to_dict(),
+            "registry": registry,
             "status": self.status(),
         }
 
@@ -75,8 +79,15 @@ class Workspace:
             },
         )
         stats = self.index().to_dict() if reindex else None
+        registry = register_repo(self.root)
         status = self.status()
-        return {"enabled": True, "reindexed": bool(reindex), "index": stats, "status": status}
+        return {
+            "enabled": True,
+            "reindexed": bool(reindex),
+            "index": stats,
+            "registry": registry,
+            "status": status,
+        }
 
     def disable(self, reason: str = "") -> dict[str, Any]:
         reason = reason.strip() or "repo disabled"
@@ -102,13 +113,33 @@ class Workspace:
         *,
         refresh: bool = False,
         record_event: bool = False,
+        source: str = "api",
     ) -> ContextPacket:
+        packet, _event_id = self._context_with_event(
+            question,
+            budget=budget,
+            refresh=refresh,
+            record_event=record_event,
+            source=source,
+        )
+        return packet
+
+    def _context_with_event(
+        self,
+        question: str,
+        budget: int = 800,
+        *,
+        refresh: bool = False,
+        record_event: bool = False,
+        source: str = "api",
+    ) -> tuple[ContextPacket, int | None]:
         if refresh or self.stats()["files"] == 0:
             self.index()
         packet = self.engine.recall(question, budget=budget)
+        event_id = None
         if record_event:
-            self.engine.record_resolve_event(packet)
-        return packet
+            event_id = self.engine.record_resolve_event(packet, source=source)
+        return packet, event_id
 
     def recall(
         self,
@@ -117,8 +148,15 @@ class Workspace:
         *,
         refresh: bool = False,
         record_event: bool = False,
+        source: str = "api",
     ) -> ContextPacket:
-        return self.context(question, budget=budget, refresh=refresh, record_event=record_event)
+        return self.context(
+            question,
+            budget=budget,
+            refresh=refresh,
+            record_event=record_event,
+            source=source,
+        )
 
     def remember(
         self,
@@ -140,6 +178,8 @@ class Workspace:
         commands: list[str] | None = None,
         tests: list[str] | None = None,
         outcome: str | None = None,
+        resolve_event_id: int | None = None,
+        source: str = "api",
     ) -> dict[str, Any]:
         control = load_repo_control(self.root)
         if not control.configured or not control.setup_completed:
@@ -158,6 +198,8 @@ class Workspace:
             commands=commands,
             tests=tests,
             outcome=outcome,
+            resolve_event_id=resolve_event_id,
+            source=source,
         )
 
     def changed(self) -> list[TaskMemory]:
@@ -179,6 +221,11 @@ class Workspace:
         codex_mcp = next((item for item in integrations if item["agent"] == "codex"), None)
         setup_agents = control.setup_agents or (
             tuple(SUPPORTED_AGENTS) if control.configured and control.setup_completed else ()
+        )
+        registry_items = list_registered_repos()
+        registry_entry = next(
+            (item for item in registry_items if item.get("root") == str(self.root)),
+            None,
         )
         agents = []
         for agent in SUPPORTED_AGENTS:
@@ -211,9 +258,18 @@ class Workspace:
             "stale_count": stale_count,
             "stats": stats,
             "agents": agents,
+            "registry_registered": registry_entry is not None,
+            "registry": registry_entry or {},
         }
 
-    def automatic_context(self, question: str, budget: int = 800) -> dict[str, Any]:
+    def automatic_context(
+        self,
+        question: str,
+        budget: int = 800,
+        *,
+        dry_run: bool = False,
+        source: str = "mcp",
+    ) -> dict[str, Any]:
         status = self.status()
         if not status["configured"] or not status["setup_completed"]:
             return _disabled_response(
@@ -221,12 +277,21 @@ class Workspace:
             )
         if not status["enabled"]:
             return _disabled_response(question, budget, status["reason"] or "repo disabled", status)
-        packet = self.context(question, budget=budget, refresh=True, record_event=True)
+        packet, event_id = self._context_with_event(
+            question,
+            budget=budget,
+            refresh=True,
+            record_event=not dry_run,
+            source=source,
+        )
         data = packet.to_dict()
         data["enabled"] = True
+        data["repo_root"] = str(self.root)
+        data["event_id"] = event_id
+        data["dry_run"] = dry_run
         return data
 
-    def doctor(self) -> dict[str, Any]:
+    def doctor(self, *, live: bool = False) -> dict[str, Any]:
         try:
             from . import _native  # noqa: F401
 
@@ -246,7 +311,8 @@ class Workspace:
             for item in status["integrations"]
             if item["mode"] == "mcp" and item["agent"] in selected_agents
         ]
-        return {
+        savings = self.savings() if status["db_exists"] else {}
+        result = {
             "root": str(self.root),
             "db_exists": status["db_exists"],
             "config_exists": status["configured"],
@@ -268,7 +334,30 @@ class Workspace:
             "integrations": status["integrations"],
             "mcp_runtime_required": not mcp_package,
             "manual_mcp_config_required": any(not item["ready"] for item in mcp_integrations),
+            "registry_registered": status["registry_registered"],
+            "registry": status["registry"],
+            "activation": {
+                "resolve_events": savings.get("resolve_events", 0),
+                "capture_events": savings.get("captures_saved", 0)
+                + savings.get("skipped_captures", 0),
+                "last_resolve_at": savings.get("last_resolve_at", ""),
+                "last_capture_at": savings.get("last_capture_at", ""),
+                "last_mcp_call_at": savings.get("last_mcp_call_at", ""),
+                "last_tool_source": savings.get("last_tool_source", ""),
+                "has_agent_calls": bool(
+                    savings.get("last_resolve_at") or savings.get("last_capture_at")
+                ),
+            },
         }
+        if live:
+            result["live"] = live_activation_check(self.root)
+        return result
+
+    def repos(self) -> list[dict[str, Any]]:
+        return list_registered_repos()
+
+    def repair_mcp(self) -> dict[str, Any]:
+        return repair_mcp_configs(self.root)
 
     def export_json(self) -> dict:
         return self.engine.export_json()
@@ -334,6 +423,9 @@ def _disabled_response(
         "warnings": [reason],
         "context": "",
         "repo_status": status,
+        "repo_root": str(status.get("root", "")),
+        "event_id": None,
+        "dry_run": False,
     }
 
 

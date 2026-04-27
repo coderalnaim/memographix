@@ -6,11 +6,24 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .registry import list_registered_repos, resolve_repo
 from .workspace import Workspace
 
 
-def tool_resolve_task(root: str, question: str, token_budget: int = 800) -> dict[str, Any]:
-    return Workspace.open(root).automatic_context(question, budget=token_budget)
+def tool_resolve_task(
+    root: str,
+    question: str,
+    token_budget: int = 800,
+    repo: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    workspace, error, resolution = _workspace_for(root, repo=repo, hint=question)
+    if error:
+        return _resolve_error(question, token_budget, error)
+    data = workspace.automatic_context(question, budget=token_budget, dry_run=dry_run, source="mcp")
+    data["repo_root"] = str(workspace.root)
+    data["matched_by"] = resolution.matched_by
+    return data
 
 
 def tool_capture_task(
@@ -23,6 +36,8 @@ def tool_capture_task(
     tests: list[str] | None = None,
     outcome: str | None = None,
     validation: dict[str, Any] | None = None,
+    repo: str | None = None,
+    resolve_event_id: int | None = None,
 ) -> dict[str, Any]:
     commands = commands or []
     tests = tests or []
@@ -30,7 +45,16 @@ def tool_capture_task(
         commands.extend(str(item) for item in validation.get("commands", []) or [])
         tests.extend(str(item) for item in validation.get("tests", []) or [])
         outcome = outcome or validation.get("outcome")
-    return Workspace.open(root).capture(
+    workspace, error, _resolution = _workspace_for(root, repo=repo, hint=question)
+    if error:
+        return {
+            "saved": False,
+            "task_id": None,
+            "reason": error["reason"],
+            "evidence": [],
+            "candidates": error.get("candidates", []),
+        }
+    return workspace.capture(
         question=question,
         answer=answer,
         evidence=evidence,
@@ -38,6 +62,8 @@ def tool_capture_task(
         commands=commands,
         tests=tests,
         outcome=outcome,
+        resolve_event_id=resolve_event_id,
+        source="mcp",
     )
 
 
@@ -51,13 +77,52 @@ def tool_remember_task(
     return tool_capture_task(root, question, answer, evidence=evidence, validation=validation)
 
 
-def tool_freshness_check(root: str) -> dict[str, Any]:
-    stale = Workspace.open(root).changed()
+def tool_freshness_check(root: str, repo: str | None = None) -> dict[str, Any]:
+    workspace, error, _resolution = _workspace_for(root, repo=repo)
+    if error:
+        return {
+            "stale_tasks": [],
+            "error": error["reason"],
+            "candidates": error.get("candidates", []),
+        }
+    stale = workspace.changed()
     return {"stale_tasks": [task.to_dict() for task in stale]}
 
 
-def tool_graph_stats(root: str) -> dict[str, Any]:
-    return Workspace.open(root).stats()
+def tool_graph_stats(root: str, repo: str | None = None) -> dict[str, Any]:
+    workspace, error, _resolution = _workspace_for(root, repo=repo)
+    if error:
+        return {"error": error["reason"], "candidates": error.get("candidates", [])}
+    return workspace.stats()
+
+
+def tool_list_repos() -> dict[str, Any]:
+    return {"repos": list_registered_repos()}
+
+
+def tool_activation_status(root: str, repo: str | None = None) -> dict[str, Any]:
+    workspace, error, resolution = _workspace_for(root, repo=repo)
+    if error:
+        return {
+            "resolved": False,
+            "reason": error["reason"],
+            "candidates": error.get("candidates", []),
+        }
+    status = workspace.status()
+    savings = workspace.savings()
+    return {
+        "resolved": True,
+        "repo_root": str(workspace.root),
+        "matched_by": resolution.matched_by,
+        "enabled": status["enabled"],
+        "configured": status["configured"],
+        "setup_completed": status["setup_completed"],
+        "stats": status["stats"],
+        "last_resolve_at": savings.get("last_resolve_at", ""),
+        "last_capture_at": savings.get("last_capture_at", ""),
+        "last_mcp_call_at": savings.get("last_mcp_call_at", ""),
+        "last_tool_source": savings.get("last_tool_source", ""),
+    }
 
 
 def serve(root: str = ".") -> None:
@@ -84,13 +149,17 @@ def serve(root: str = ".") -> None:
                     "properties": {
                         "question": {"type": "string"},
                         "token_budget": {"type": "integer", "default": 800},
+                        "repo": {"type": "string"},
+                        "dry_run": {"type": "boolean", "default": False},
                     },
                     "required": ["question"],
                 },
             ),
             types.Tool(
                 name="capture_task",
-                description="Automatically save a completed developer task when safe evidence exists.",
+                description=(
+                    "Automatically save a completed developer task when safe evidence exists."
+                ),
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -102,6 +171,8 @@ def serve(root: str = ".") -> None:
                         "tests": {"type": "array", "items": {"type": "string"}},
                         "outcome": {"type": "string"},
                         "validation": {"type": "object"},
+                        "repo": {"type": "string"},
+                        "resolve_event_id": {"type": "integer"},
                     },
                     "required": ["question", "answer"],
                 },
@@ -128,7 +199,17 @@ def serve(root: str = ".") -> None:
             types.Tool(
                 name="graph_stats",
                 description="Return indexed file, symbol, edge, and task counts.",
+                inputSchema={"type": "object", "properties": {"repo": {"type": "string"}}},
+            ),
+            types.Tool(
+                name="list_repos",
+                description="List repos registered for automatic Memographix activation.",
                 inputSchema={"type": "object", "properties": {}},
+            ),
+            types.Tool(
+                name="activation_status",
+                description="Report whether Memographix can route to a configured repo.",
+                inputSchema={"type": "object", "properties": {"repo": {"type": "string"}}},
             ),
         ]
 
@@ -139,6 +220,8 @@ def serve(root: str = ".") -> None:
                 workspace_root,
                 arguments["question"],
                 int(arguments.get("token_budget", 800)),
+                arguments.get("repo"),
+                bool(arguments.get("dry_run", False)),
             )
         elif name == "capture_task":
             data = tool_capture_task(
@@ -151,6 +234,8 @@ def serve(root: str = ".") -> None:
                 arguments.get("tests"),
                 arguments.get("outcome"),
                 arguments.get("validation"),
+                arguments.get("repo"),
+                arguments.get("resolve_event_id"),
             )
         elif name == "remember_task":
             data = tool_remember_task(
@@ -161,9 +246,13 @@ def serve(root: str = ".") -> None:
                 arguments.get("validation"),
             )
         elif name == "freshness_check":
-            data = tool_freshness_check(workspace_root)
+            data = tool_freshness_check(workspace_root, arguments.get("repo"))
         elif name == "graph_stats":
-            data = tool_graph_stats(workspace_root)
+            data = tool_graph_stats(workspace_root, arguments.get("repo"))
+        elif name == "list_repos":
+            data = tool_list_repos()
+        elif name == "activation_status":
+            data = tool_activation_status(workspace_root, arguments.get("repo"))
         else:
             data = {"error": f"unknown tool: {name}"}
         return [types.TextContent(type="text", text=json.dumps(data, indent=2))]
@@ -183,14 +272,31 @@ def serve_jsonl(root: str = ".") -> None:
       {"tool":"capture_task","question":"...","answer":"...","evidence":["app.py"]}
     """
     workspace_root = str(Path(root).resolve())
+    tools = [
+        "resolve_task",
+        "capture_task",
+        "remember_task",
+        "freshness_check",
+        "graph_stats",
+        "list_repos",
+        "activation_status",
+    ]
     for line in sys.stdin:
         if not line.strip():
             continue
         try:
             req = json.loads(line)
             tool = req.get("tool")
-            if tool == "resolve_task":
-                data = tool_resolve_task(workspace_root, req["question"], int(req.get("token_budget", 800)))
+            if tool == "list_tools":
+                data = {"tools": tools}
+            elif tool == "resolve_task":
+                data = tool_resolve_task(
+                    workspace_root,
+                    req["question"],
+                    int(req.get("token_budget", 800)),
+                    req.get("repo"),
+                    bool(req.get("dry_run", False)),
+                )
             elif tool == "capture_task":
                 data = tool_capture_task(
                     workspace_root,
@@ -202,6 +308,8 @@ def serve_jsonl(root: str = ".") -> None:
                     req.get("tests"),
                     req.get("outcome"),
                     req.get("validation"),
+                    req.get("repo"),
+                    req.get("resolve_event_id"),
                 )
             elif tool == "remember_task":
                 data = tool_remember_task(
@@ -212,11 +320,52 @@ def serve_jsonl(root: str = ".") -> None:
                     req.get("validation"),
                 )
             elif tool == "freshness_check":
-                data = tool_freshness_check(workspace_root)
+                data = tool_freshness_check(workspace_root, req.get("repo"))
             elif tool == "graph_stats":
-                data = tool_graph_stats(workspace_root)
+                data = tool_graph_stats(workspace_root, req.get("repo"))
+            elif tool == "list_repos":
+                data = tool_list_repos()
+            elif tool == "activation_status":
+                data = tool_activation_status(workspace_root, req.get("repo"))
             else:
                 data = {"error": f"unknown tool: {tool}"}
         except Exception as exc:
             data = {"error": str(exc)}
         print(json.dumps(data), flush=True)
+
+
+def _workspace_for(
+    root: str,
+    *,
+    repo: str | None = None,
+    hint: str = "",
+):
+    resolution = resolve_repo(repo, cwd=root, hint=hint)
+    if not resolution.ok or resolution.root is None:
+        return (
+            None,
+            {"reason": resolution.reason, "candidates": resolution.candidates or []},
+            resolution,
+        )
+    return Workspace.open(resolution.root), None, resolution
+
+
+def _resolve_error(question: str, token_budget: int, error: dict[str, Any]) -> dict[str, Any]:
+    reason = error["reason"]
+    status = "needs_repo" if reason in {"repo required", "ambiguous repo"} else "disabled"
+    return {
+        "question": question,
+        "status": status,
+        "enabled": False,
+        "reason": reason,
+        "candidates": error.get("candidates", []),
+        "token_budget": token_budget,
+        "estimated_tokens": 0,
+        "summary": "Memographix could not route this request to one configured repo.",
+        "matched_task": None,
+        "evidence": [],
+        "warnings": [reason],
+        "context": "",
+        "repo_root": "",
+        "event_id": None,
+    }

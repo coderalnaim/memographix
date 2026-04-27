@@ -60,6 +60,7 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("stats", help="show index statistics")
 
     doctor = sub.add_parser("doctor", help="show setup and integration health")
+    doctor.add_argument("--live", action="store_true")
     doctor.add_argument("--json", action="store_true")
 
     savings = sub.add_parser("savings", help="show estimated token savings from memory reuse")
@@ -68,6 +69,13 @@ def main(argv: list[str] | None = None) -> None:
 
     export = sub.add_parser("export", help="export graph and task memory as JSON")
     export.add_argument("--out", type=Path, default=Path("memographix-export.json"))
+
+    repos = sub.add_parser("repos", help="list repos registered for Memographix activation")
+    repos.add_argument("--json", action="store_true")
+
+    repair = sub.add_parser("repair", help="repair Memographix local integration config")
+    repair.add_argument("--mcp", action="store_true", required=True)
+    repair.add_argument("--json", action="store_true")
 
     serve_cmd = sub.add_parser("serve", help="start MCP stdio server or JSONL fallback")
     serve_cmd.add_argument("--jsonl", action="store_true", help="force JSONL fallback server")
@@ -102,6 +110,7 @@ def main(argv: list[str] | None = None) -> None:
                 f"{result['index']['edges']} edges in {result['index']['duration_ms']}ms"
             )
             print(f"MCP config: {result['mcp_config']}")
+            print(f"Registered repo: {result['registry']['name']}")
             ready = [item for item in result["integrations"] if item["ready"]]
             print(f"MCP integrations ready: {len(ready)}/{len(result['integrations'])}")
             for item in result["integrations"]:
@@ -195,7 +204,7 @@ def main(argv: list[str] | None = None) -> None:
     elif args.cmd == "stats":
         print(json.dumps(ws.stats(), indent=2))
     elif args.cmd == "doctor":
-        result = ws.doctor()
+        result = ws.doctor(live=args.live)
         if args.json:
             print(json.dumps(result, indent=2))
         else:
@@ -207,10 +216,21 @@ def main(argv: list[str] | None = None) -> None:
                 print("mcp_runtime_required: install or upgrade memographix from PyPI")
             print(f"native_index_available: {result['native_index_available']}")
             print(f"enabled: {result['enabled']}")
+            print(f"registry_registered: {result['registry_registered']}")
             ready = [item for item in result["integrations"] if item["ready"]]
             print(f"mcp_integrations_ready: {len(ready)}/{len(result['integrations'])}")
+            activation = result["activation"]
+            print(f"agent_tool_calls_seen: {activation['has_agent_calls']}")
+            if activation["last_mcp_call_at"]:
+                print(f"last_mcp_call_at: {activation['last_mcp_call_at']}")
             if result["status_reason"]:
                 print(f"status_reason: {result['status_reason']}")
+            if args.live:
+                live = result["live"]
+                print(f"live_check_ok: {live['ok']}")
+                if not live["ok"]:
+                    reason = live.get("reason") or live.get("stderr") or "failed"
+                    print(f"live_check_reason: {reason}")
             print(f"stats: {json.dumps(result['stats'], sort_keys=True)}")
             for item in result["integrations"]:
                 status = "ready" if item["ready"] else "needs review"
@@ -231,9 +251,34 @@ def main(argv: list[str] | None = None) -> None:
             print(f"captures_saved: {result['captures_saved']}")
             print(f"skipped_captures: {result['skipped_captures']}")
             print(f"estimated_saved_tokens: {result['estimated_saved_tokens']}")
+            if result.get("diagnostic"):
+                print()
+                print(result["diagnostic"])
+                print("Next checks:")
+                print("- mgx doctor --live")
+                print("- restart your AI agent so it reloads MCP tools")
+                print("- open the chat from this repo or mention a registered repo name")
     elif args.cmd == "export":
         out = ws.write_export(args.out)
         print(f"Exported {out.resolve()}")
+    elif args.cmd == "repos":
+        result = {"repos": ws.repos()}
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            if not result["repos"]:
+                print("No Memographix repos registered.")
+            for item in result["repos"]:
+                print(f"{item['name']}: {item['root']}")
+    elif args.cmd == "repair":
+        result = ws.repair_mcp()
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            print(f"Removed {result['removed_entries']} stale Memographix MCP entrie(s).")
+            for action in result["actions"]:
+                if action["removed"]:
+                    print(f"- {action['path']}: {', '.join(action['removed'])}")
     elif args.cmd == "serve":
         if args.jsonl:
             from .mcp import serve_jsonl

@@ -33,7 +33,10 @@ def test_repeated_task_memory_is_fresh_then_stale(tmp_path: Path) -> None:
     assert "prior_answer" in repeated.context
     assert repeated.estimated_tokens <= 300
 
-    (tmp_path / "app.py").write_text("def handle_auth(user_id):\n    return None\n", encoding="utf-8")
+    (tmp_path / "app.py").write_text(
+        "def handle_auth(user_id):\n    return None\n",
+        encoding="utf-8",
+    )
     stale = ws.context("Can you explain again how auth loads user?", budget=300)
     assert stale.status == Freshness.STALE
     assert "Do not reuse the prior answer" in stale.context

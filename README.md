@@ -13,13 +13,15 @@ Run this inside the repo where you want AI-agent memory:
 ```bash
 pipx install memographix
 mgx setup
+mgx doctor --live
 mgx savings
 ```
 
 `pipx` avoids system Python conflicts on macOS and Linux. The PyPI package
 includes the CLI, local indexer, MCP server, and agent integration support.
 `mgx setup` creates `.memographix/`, indexes the repo, writes MCP config for
-supported agents, and installs project agent rules.
+supported agents, registers the repo for global MCP routing, and installs
+project agent rules.
 
 If you are already inside a virtual environment or CI job, this also works:
 
@@ -31,10 +33,7 @@ PyPI resolves the latest release automatically, so install commands stay
 versionless.
 
 ## Daily Use
-
-Use your AI agent normally.
-
-Memographix is designed to work in the background:
+Use your AI agent normally. Memographix works in the background:
 
 - Before work, the agent asks Memographix for a small context packet.
 - After useful work, the agent captures the answer with changed files, commands,
@@ -45,10 +44,11 @@ Memographix is designed to work in the background:
 Check setup health:
 
 ```bash
-mgx doctor
+mgx doctor --live
 ```
 
-`mgx doctor` reports each integration separately. Restart agents after setup if
+`mgx doctor --live` verifies that the MCP server starts, expected tools are
+available, and the router can resolve this repo. Restart agents after setup if
 they were already open so they reload MCP tools.
 
 Control it per repo:
@@ -69,16 +69,21 @@ See the estimated token savings:
 mgx savings --since 30d
 ```
 
-## Advanced CLI
+If savings are all zero, Memographix now tells you whether no agent tool calls
+have been recorded yet. Run `mgx doctor --live`, restart the agent, and either
+open the chat from the repo or mention a registered repo name.
 
-Manual commands are still available for debugging and non-MCP workflows:
+List repos registered for global routing:
 
 ```bash
-mgx ask "how does request routing work?" --budget 800
-mgx remember --question "how does routing work?" --answer "..." --evidence app/routes.py
+mgx repos
 ```
 
-Most developers should not need the manual memory command after `mgx setup`.
+Repair stale duplicate MCP entries:
+
+```bash
+mgx repair --mcp
+```
 
 ## Proof
 
@@ -96,12 +101,10 @@ notes.
 - Send smaller context packets to AI agents.
 - Run locally without a required LLM API or cloud service.
 
-## What It Does Not Do
+## Boundaries
 
-- It does not upload your code.
-- It does not save full chat transcripts by default.
-- It does not treat stale memory as correct.
-- It does not install benchmark tools or competitors in the runtime package.
+Memographix does not upload your code, save full chat transcripts by default,
+treat stale memory as correct, or install benchmark tools in the runtime package.
 
 ## Docs
 
@@ -109,6 +112,6 @@ notes.
 - [Security](SECURITY.md): local privacy, skipped secrets, and sandbox safety.
 - [Agent integrations](docs/AGENT_INTEGRATIONS.md): MCP and agent setup.
 - [Architecture](docs/ARCHITECTURE.md): Python/Rust design and storage model.
-- [Repeat task memory](docs/REPEAT_TASK_MEMORY.md): capsules, freshness, and token reduction.
+- [Repeat task memory](docs/REPEAT_TASK_MEMORY.md): capsules and freshness.
 - [Contributing](docs/CONTRIBUTING.md): local development and test expectations.
 - [PyPI release](docs/PYPI_RELEASE.md): trusted publishing and release checks.

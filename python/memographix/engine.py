@@ -298,9 +298,13 @@ class LocalEngine:
         commands: list[str] | None = None,
         tests: list[str] | None = None,
         outcome: str | None = None,
+        resolve_event_id: int | None = None,
+        source: str = "api",
     ) -> dict[str, Any]:
         validation_artifact = bool(commands or tests or outcome)
         candidate_paths = [*(evidence or []), *(changed_files or [])]
+        if not candidate_paths and resolve_event_id:
+            candidate_paths.extend(self._evidence_from_resolve_event(resolve_event_id))
         safe_evidence = self._safe_evidence_paths(candidate_paths)
         if not safe_evidence and validation_artifact:
             safe_evidence = self._safe_evidence_paths(self._infer_evidence(question, limit=5))
@@ -315,7 +319,13 @@ class LocalEngine:
                 question=question,
                 status="skipped",
                 skipped_reason=reason,
-                data={"commands": commands or [], "tests": tests or [], "outcome": outcome or ""},
+                data={
+                    "commands": commands or [],
+                    "tests": tests or [],
+                    "outcome": outcome or "",
+                    "source": source,
+                    "resolve_event_id": resolve_event_id,
+                },
             )
             return {"saved": False, "task_id": None, "reason": reason, "evidence": []}
         validation = {
@@ -335,18 +345,23 @@ class LocalEngine:
             question=question,
             status="saved",
             task_id=task_id,
-            data={"evidence": safe_evidence, "validation": validation},
+            data={
+                "evidence": safe_evidence,
+                "validation": validation,
+                "source": source,
+                "resolve_event_id": resolve_event_id,
+            },
         )
         return {"saved": True, "task_id": task_id, "reason": "", "evidence": safe_evidence}
 
-    def record_resolve_event(self, packet: ContextPacket) -> None:
+    def record_resolve_event(self, packet: ContextPacket, *, source: str = "api") -> int:
         baseline_tokens = self._baseline_tokens_for_evidence(packet.evidence)
         estimated_saved = (
             max(0, baseline_tokens - packet.estimated_tokens)
             if packet.status == Freshness.FRESH
             else 0
         )
-        self._record_event(
+        return self._record_event(
             event_type="resolve_task",
             question=packet.question,
             status=packet.status.value,
@@ -359,6 +374,7 @@ class LocalEngine:
                 "confidence": packet.confidence,
                 "warnings": packet.warnings,
                 "evidence": [ev.to_dict() for ev in packet.evidence],
+                "source": source,
             },
         )
 
@@ -380,6 +396,21 @@ class LocalEngine:
             ).fetchall()
             resolve_rows = [row for row in rows if row["event_type"] == "resolve_task"]
             capture_rows = [row for row in rows if row["event_type"] == "capture_task"]
+            last_resolve = next((row for row in rows if row["event_type"] == "resolve_task"), None)
+            last_capture = next((row for row in rows if row["event_type"] == "capture_task"), None)
+            last_tool = next(
+                (row for row in rows if row["event_type"] in {"resolve_task", "capture_task"}),
+                None,
+            )
+            last_mcp = next(
+                (
+                    row
+                    for row in rows
+                    if row["event_type"] in {"resolve_task", "capture_task"}
+                    and self._event_source(row) == "mcp"
+                ),
+                None,
+            )
             task_counts: Counter[int] = Counter(
                 int(row["task_id"])
                 for row in resolve_rows
@@ -395,19 +426,33 @@ class LocalEngine:
                         "question": task["question"] if task else "",
                     }
                 )
-            return {
+            result = {
                 "estimated": True,
                 "formula": "saved_tokens = raw_evidence_file_tokens - returned_packet_tokens",
                 "since_days": since_days,
                 "resolve_events": len(resolve_rows),
-                "fresh_hits": sum(1 for row in resolve_rows if row["status"] == Freshness.FRESH.value),
-                "new_contexts": sum(1 for row in resolve_rows if row["status"] == Freshness.NEW.value),
+                "fresh_hits": sum(
+                    1 for row in resolve_rows if row["status"] == Freshness.FRESH.value
+                ),
+                "new_contexts": sum(
+                    1 for row in resolve_rows if row["status"] == Freshness.NEW.value
+                ),
                 "stale_preventions": sum(int(row["stale_prevention"]) for row in resolve_rows),
                 "captures_saved": sum(1 for row in capture_rows if row["status"] == "saved"),
                 "skipped_captures": sum(1 for row in capture_rows if row["status"] == "skipped"),
                 "estimated_saved_tokens": sum(int(row["estimated_saved_tokens"]) for row in rows),
                 "top_repeated_tasks": top_tasks,
+                "last_resolve_at": last_resolve["created_at"] if last_resolve else "",
+                "last_capture_at": last_capture["created_at"] if last_capture else "",
+                "last_mcp_call_at": last_mcp["created_at"] if last_mcp else "",
+                "last_tool_source": self._event_source(last_tool) if last_tool else "",
             }
+            if not resolve_rows and not capture_rows:
+                result["diagnostic"] = (
+                    "No agent tool calls recorded yet. Run `mgx doctor --live`, restart your "
+                    "agent, and open the chat from this repo or mention a registered repo name."
+                )
+            return result
 
     def _record_event(
         self,
@@ -421,9 +466,9 @@ class LocalEngine:
         stale_prevention: int = 0,
         skipped_reason: str = "",
         data: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> int:
         with closing(connect(self.db_path)) as conn:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 INSERT INTO memory_events(
                     event_type, question, status, task_id, packet_tokens, baseline_tokens,
@@ -446,6 +491,7 @@ class LocalEngine:
                 ),
             )
             conn.commit()
+            return int(cursor.lastrowid)
 
     def recall(self, question: str, budget: int = 800) -> ContextPacket:
         match = self._best_task(question)
@@ -792,6 +838,26 @@ class LocalEngine:
             if len(paths) >= limit:
                 break
         return paths
+
+    def _evidence_from_resolve_event(self, event_id: int) -> list[str]:
+        with closing(connect(self.db_path)) as conn:
+            row = conn.execute(
+                "SELECT data_json FROM memory_events WHERE id=? AND event_type='resolve_task'",
+                (event_id,),
+            ).fetchone()
+        if not row:
+            return []
+        data = json_loads(row["data_json"])
+        paths = []
+        for item in data.get("evidence", []) or []:
+            if isinstance(item, dict) and item.get("path"):
+                paths.append(str(item["path"]))
+        return paths
+
+    def _event_source(self, row: Any) -> str:
+        if row is None:
+            return ""
+        return str(json_loads(row["data_json"]).get("source", ""))
 
     def _make_evidence(self, raw_path: str) -> Evidence:
         path = Path(raw_path)

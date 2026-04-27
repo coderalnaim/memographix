@@ -19,9 +19,9 @@ mgx setup
 ```
 
 Setup writes `.memographix/mcp.json`, configures supported MCP clients, and
-installs project rules for Codex, Claude, Cursor, Copilot, Gemini, OpenCode,
-Aider, and Windsurf-style agents. Restart already-open agents after setup so
-they reload MCP tools.
+registers the repo for global routing. It also installs project rules for
+Codex, Claude, Cursor, Copilot, Gemini, OpenCode, Aider, and Windsurf-style
+agents. Restart already-open agents after setup so they reload MCP tools.
 The old `pip install "memographix[mcp]"` form remains accepted for backward
 compatibility, but it is no longer required.
 
@@ -41,7 +41,8 @@ configuration file:
 | Windsurf | `~/.codeium/mcp_config.json` |
 | Aider | project rules fallback |
 
-Run `mgx doctor` to see which integrations are ready for the current repo.
+Run `mgx doctor --live` to verify that the MCP server starts, expected tools are
+available, and the router can resolve the current repo.
 Aider does not currently have a stable native MCP config path in Memographix, so
 setup installs project rules and the CLI fallback for it.
 
@@ -50,9 +51,12 @@ setup installs project rules and the CLI fallback for it.
 Agents should use these tools automatically:
 
 - `resolve_task`: call before implementation, debugging, architecture, or
-  test-failure work.
+  test-failure work. Pass `repo` when the chat is outside the repo or the user
+  mentions a repo name.
 - `capture_task`: call after useful work with the answer, changed files,
-  commands, tests, and outcome.
+  commands, tests, outcome, and `resolve_event_id` when available.
+- `list_repos`: list repos registered for global routing.
+- `activation_status`: confirm that a repo can be resolved and has seen calls.
 - `freshness_check`: inspect stale memories.
 - `graph_stats`: inspect index health.
 
@@ -83,8 +87,17 @@ capture through MCP.
 ## Health Check
 
 ```bash
-mgx doctor
+mgx doctor --live
 ```
 
-Use this to confirm that local state, MCP config, native indexing, and project
-rules are present.
+Use this to confirm that local state, MCP config, native indexing, project
+rules, live MCP startup, and repo routing are working. If `mgx savings` reports
+zero events, the agent has not called Memographix yet.
+
+Useful diagnostics:
+
+```bash
+mgx repos
+mgx repair --mcp
+mgx savings
+```

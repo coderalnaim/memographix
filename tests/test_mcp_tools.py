@@ -3,9 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from memographix.mcp import (
+    tool_activation_status,
     tool_capture_task,
     tool_freshness_check,
     tool_graph_stats,
+    tool_list_repos,
     tool_remember_task,
     tool_resolve_task,
 )
@@ -26,6 +28,8 @@ def test_mcp_tool_functions(tmp_path: Path) -> None:
     assert remembered["task_id"] == 1
     packet = tool_resolve_task(str(tmp_path), "How is memory saved?", 300)
     assert packet["status"] == "fresh"
+    assert packet["repo_root"] == str(tmp_path)
+    assert packet["event_id"] is not None
     assert tool_freshness_check(str(tmp_path))["stale_tasks"] == []
 
 
@@ -51,6 +55,43 @@ def test_capture_task_evidence_gate(tmp_path: Path) -> None:
     )
     assert saved["saved"] is True
     assert saved["evidence"] == ["worker.py"]
+
+
+def test_capture_can_reuse_resolve_event_evidence(tmp_path: Path) -> None:
+    (tmp_path / "worker.py").write_text("def run_worker():\n    return True\n", encoding="utf-8")
+    Workspace.open(tmp_path).setup(agents="codex")
+
+    packet = tool_resolve_task(str(tmp_path), "What runs the worker?", 300)
+    assert packet["event_id"] is not None
+    saved = tool_capture_task(
+        str(tmp_path),
+        "What runs the worker?",
+        "run_worker runs it.",
+        commands=["pytest -q"],
+        outcome="passed",
+        resolve_event_id=packet["event_id"],
+    )
+    assert saved["saved"] is True
+    assert saved["evidence"]
+
+
+def test_global_router_resolves_registered_repo_by_alias(tmp_path: Path) -> None:
+    repo = tmp_path / "nocfo-support-agent-frontend"
+    repo.mkdir()
+    (repo / "main.tsx").write_text("export const main = true;\n", encoding="utf-8")
+    Workspace.open(repo).setup(agents="codex")
+
+    listed = tool_list_repos()
+    assert listed["repos"][0]["root"] == str(repo)
+    status = tool_activation_status(str(tmp_path), repo="support agent frontend")
+    assert status["resolved"] is True
+    assert status["repo_root"] == str(repo)
+    packet = tool_resolve_task(
+        str(tmp_path),
+        "Explain the support agent frontend main entrypoint.",
+        300,
+    )
+    assert packet["repo_root"] == str(repo)
 
 
 def test_mcp_automatic_resolve_requires_setup(tmp_path: Path) -> None:
@@ -87,3 +128,14 @@ def test_mcp_disabled_repo_skips_resolve_and_capture(tmp_path: Path) -> None:
         "evidence": [],
     }
     assert ws.stats()["tasks"] == 0
+
+
+def test_dry_run_resolve_does_not_record_event(tmp_path: Path) -> None:
+    (tmp_path / "module.py").write_text("def run():\n    return True\n", encoding="utf-8")
+    ws = Workspace.open(tmp_path)
+    ws.setup(agents="codex")
+
+    packet = tool_resolve_task(str(tmp_path), "How does run work?", 300, dry_run=True)
+    assert packet["dry_run"] is True
+    assert packet["event_id"] is None
+    assert ws.savings()["resolve_events"] == 0

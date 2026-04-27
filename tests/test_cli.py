@@ -52,11 +52,12 @@ def test_cli_setup_doctor_and_savings(tmp_path: Path, capsys, monkeypatch) -> No
     assert (tmp_path / ".memographix" / "config.toml").exists()
     assert (tmp_path / ".memographix" / "mcp.json").exists()
     assert (tmp_path / "AGENTS.md").exists()
+    assert setup["registry"]["root"] == str(tmp_path)
     codex_config_text = codex_config.read_text(encoding="utf-8")
-    assert "[mcp_servers.memographix_" in codex_config_text
-    assert json.dumps(str(tmp_path)) in codex_config_text
+    assert "[mcp_servers.memographix]" in codex_config_text
+    assert '"serve"' in codex_config_text
 
-    main(["--root", str(tmp_path), "doctor", "--json"])
+    main(["--root", str(tmp_path), "doctor", "--live", "--json"])
     doctor = json.loads(capsys.readouterr().out)
     assert doctor["db_exists"] is True
     assert doctor["config_exists"] is True
@@ -64,11 +65,19 @@ def test_cli_setup_doctor_and_savings(tmp_path: Path, capsys, monkeypatch) -> No
     assert doctor["setup_agents"] == ["codex"]
     assert doctor["codex_mcp_registered"] is True
     assert doctor["manual_mcp_config_required"] is False
+    assert doctor["registry_registered"] is True
+    assert doctor["live"]["ok"] is True
+    assert doctor["live"]["dry_run_resolve_verified"] is True
 
     main(["--root", str(tmp_path), "savings", "--json"])
     savings = json.loads(capsys.readouterr().out)
     assert savings["estimated"] is True
     assert "saved_tokens = raw_evidence_file_tokens" in savings["formula"]
+    assert "No agent tool calls recorded yet" in savings["diagnostic"]
+
+    main(["--root", str(tmp_path), "repos", "--json"])
+    repos = json.loads(capsys.readouterr().out)
+    assert repos["repos"][0]["root"] == str(tmp_path)
 
 
 def test_setup_writes_supported_mcp_integrations(tmp_path: Path, monkeypatch) -> None:
@@ -104,6 +113,32 @@ def test_setup_writes_supported_mcp_integrations(tmp_path: Path, monkeypatch) ->
     assert server["type"] == "local"
     assert server["command"][-3:] == ["--root", str(tmp_path), "serve"]
     assert "mcpServers" in json.loads((tmp_path / "windsurf-mcp.json").read_text(encoding="utf-8"))
+    windsurf = json.loads((tmp_path / "windsurf-mcp.json").read_text(encoding="utf-8"))
+    assert windsurf["mcpServers"]["memographix"]["args"] == ["serve"]
+
+
+def test_repair_mcp_flags_duplicate_memographix_servers(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    codex_config = tmp_path / "codex-config.toml"
+    monkeypatch.setenv("MEMOGRAPHIX_CODEX_CONFIG", str(codex_config))
+    (tmp_path / "service.py").write_text("def handle():\n    return True\n", encoding="utf-8")
+    main(["--root", str(tmp_path), "setup", "--agents", "codex"])
+    capsys.readouterr()
+    codex_config.write_text(
+        codex_config.read_text(encoding="utf-8")
+        + "\n[mcp_servers.memographix_old]\ncommand = \"mgx\"\nargs = [\"serve\"]\n",
+        encoding="utf-8",
+    )
+
+    main(["--root", str(tmp_path), "repair", "--mcp", "--json"])
+    result = json.loads(capsys.readouterr().out)
+    assert result["removed_entries"] >= 1
+    text = codex_config.read_text(encoding="utf-8")
+    assert "[mcp_servers.memographix]" in text
+    assert "memographix_old" not in text
 
 
 def test_cli_enable_disable_status(tmp_path: Path, capsys, monkeypatch) -> None:

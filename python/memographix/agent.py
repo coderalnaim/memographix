@@ -21,9 +21,12 @@ Use Memographix automatically for implementation, architecture, debugging, and
 test-failure work:
 
 - Before answering, call the `resolve_task` MCP tool with the user's task.
+- If the chat is not opened from this repo, pass the repo name/path to
+  `resolve_task` when the user mentions it.
 - If MCP is unavailable, run `mgx ask "<user task>" --budget 800`.
 - After useful work, call the `capture_task` MCP tool with the final answer,
-  changed files, commands, tests, and outcome.
+  changed files, commands, tests, outcome, and the `resolve_event_id` returned
+  by `resolve_task` when available.
 
 Rules:
 - Prefer fresh Memographix task capsules over re-reading raw files.
