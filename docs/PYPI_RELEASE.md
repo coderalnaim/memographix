@@ -51,3 +51,7 @@ python -m venv /tmp/mgx-check
 
 Runtime install must not require Docker, Node, Graphify, GraphRAG, or competitor
 benchmark tools.
+
+The README is packaged from the root `README.md` through `pyproject.toml`.
+PyPI snapshots that README at publish time. Keep install instructions versionless
+and rely on the live PyPI badge for the current published version.

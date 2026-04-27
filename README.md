@@ -13,21 +13,21 @@ retrieves fresh context before work and captures useful task memory after work.
 
 ## Quick Start
 
+Run this inside the repo where you want AI-agent memory:
+
 ```bash
 pip install memographix
 mgx setup
 mgx savings
 ```
 
-That creates local state in `.memographix/`, indexes the repo, writes an MCP
-server config, and installs project agent rules.
+The normal PyPI install includes the CLI, local indexer, MCP server, and agent
+integration support. `mgx setup` creates local state in `.memographix/`, indexes
+the repo, writes an MCP server config, and installs project agent rules.
 
-For MCP clients that need the Python MCP server package, install the optional
-extra instead:
-
-```bash
-pip install "memographix[mcp]"
-```
+The PyPI badge above always shows the latest published version. The README does
+not hard-code a version number, so release updates do not require rewriting the
+install command.
 
 ## Daily Use
 
@@ -46,6 +46,9 @@ Check setup health:
 ```bash
 mgx doctor
 ```
+
+If `mgx doctor` says an agent needs manual MCP configuration, use the generated
+file at `.memographix/mcp.json` in that agent's MCP settings.
 
 Control it per repo:
 

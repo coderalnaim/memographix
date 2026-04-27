@@ -91,7 +91,6 @@ def _install_smoke(dist: Path) -> None:
             [
                 str(pip),
                 "install",
-                "--no-index",
                 "--find-links",
                 str(dist.resolve()),
                 f"memographix=={_project_version()}",

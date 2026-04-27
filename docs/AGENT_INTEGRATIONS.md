@@ -1,6 +1,12 @@
 # Agent Integrations
 
-Memographix is MCP-first. Run setup once per repo:
+Memographix is MCP-first. The standard PyPI install includes the MCP runtime:
+
+```bash
+pip install memographix
+```
+
+Run setup once per repo:
 
 ```bash
 mgx setup
@@ -8,6 +14,8 @@ mgx setup
 
 Setup writes `.memographix/mcp.json` and installs project rules for Codex,
 Claude, Cursor, Copilot, Gemini, OpenCode, Aider, and Windsurf-style agents.
+The old `pip install "memographix[mcp]"` form remains accepted for backward
+compatibility, but it is no longer required.
 
 ## Expected Agent Behavior
 
