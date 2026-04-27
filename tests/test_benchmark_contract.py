@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 
 from benchmarks.run import build_comparison, run_suite
@@ -54,17 +54,16 @@ def test_benchmark_smoke_memographix_vs_naive(tmp_path: Path) -> None:
 
 
 def test_package_contract_excludes_benchmark_tooling() -> None:
-    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert pyproject["project"]["dependencies"] == []
-    assert pyproject["tool"]["maturin"]["features"] == ["extension-module", "abi3-py310"]
-    excludes = set(pyproject["tool"]["maturin"]["exclude"])
-    assert "benchmarks/**" in excludes
-    assert "benchmark_results/**" in excludes
-    assert ".mgx-local/**" in excludes
-    assert "docs/**" in excludes
-    assert "scripts/**" in excludes
-    assert "BENCHMARKS.md" in excludes
-    assert "SECURITY.md" in excludes
+    pyproject_text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert re.search(r"(?m)^dependencies\s*=\s*\[\s*\]$", pyproject_text)
+    assert 'features = ["extension-module", "abi3-py310"]' in pyproject_text
+    assert '"benchmarks/**"' in pyproject_text
+    assert '"benchmark_results/**"' in pyproject_text
+    assert '".mgx-local/**"' in pyproject_text
+    assert '"docs/**"' in pyproject_text
+    assert '"scripts/**"' in pyproject_text
+    assert '"BENCHMARKS.md"' in pyproject_text
+    assert '"SECURITY.md"' in pyproject_text
 
     manifest = (ROOT / "MANIFEST.in").read_text(encoding="utf-8")
     assert "prune benchmarks" in manifest

@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 from collections import Counter
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -69,17 +70,17 @@ class LocalEngine:
         self.config = load_retrieval_config(self.root)
 
     def init(self) -> Path:
-        with connect(self.db_path):
+        with closing(connect(self.db_path)):
             pass
         return self.db_path
 
     def index(self) -> IndexStats:
         start = datetime.now(timezone.utc)
-        conn = connect(self.db_path)
-        records = self._scan_native(conn)
-        if records is None:
-            records = self._scan_python(conn)
-        self._apply_index(conn, records)
+        with closing(connect(self.db_path)) as conn:
+            records = self._scan_native(conn)
+            if records is None:
+                records = self._scan_python(conn)
+            self._apply_index(conn, records)
         duration = datetime.now(timezone.utc) - start
         counts = self.stats()
         return IndexStats(
@@ -244,49 +245,49 @@ class LocalEngine:
         evidence_paths: list[str] | None = None,
         validation: dict | None = None,
     ) -> int:
-        conn = connect(self.db_path)
-        normalized = self._normalize_intent(question)
-        task_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-        now = _utc_now()
-        token_count = estimate_tokens(question + "\n" + answer)
-        cur = conn.execute(
-            """
-            INSERT INTO tasks(task_hash, normalized_intent, question, answer, validation_json,
-                              token_count, created_at, updated_at)
-            VALUES(?,?,?,?,?,?,?,?)
-            """,
-            (
-                task_hash,
-                normalized,
-                question,
-                answer,
-                json.dumps(validation or {}, sort_keys=True),
-                token_count,
-                now,
-                now,
-            ),
-        )
-        task_id = int(cur.lastrowid)
-        evidence = evidence_paths if evidence_paths is not None else self._infer_evidence(question, limit=5)
-        for raw_path in evidence:
-            ev = self._make_evidence(raw_path)
-            conn.execute(
+        with closing(connect(self.db_path)) as conn:
+            normalized = self._normalize_intent(question)
+            task_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+            now = _utc_now()
+            token_count = estimate_tokens(question + "\n" + answer)
+            cur = conn.execute(
                 """
-                INSERT INTO task_evidence(task_id, path, hash, symbol_id, line_start, line_end, excerpt)
-                VALUES(?,?,?,?,?,?,?)
+                INSERT INTO tasks(task_hash, normalized_intent, question, answer, validation_json,
+                                  token_count, created_at, updated_at)
+                VALUES(?,?,?,?,?,?,?,?)
                 """,
                 (
-                    task_id,
-                    ev.path,
-                    ev.hash,
-                    ev.symbol,
-                    ev.line_start,
-                    ev.line_end,
-                    ev.excerpt,
+                    task_hash,
+                    normalized,
+                    question,
+                    answer,
+                    json.dumps(validation or {}, sort_keys=True),
+                    token_count,
+                    now,
+                    now,
                 ),
             )
-        conn.commit()
-        return task_id
+            task_id = int(cur.lastrowid)
+            evidence = evidence_paths if evidence_paths is not None else self._infer_evidence(question, limit=5)
+            for raw_path in evidence:
+                ev = self._make_evidence(raw_path)
+                conn.execute(
+                    """
+                    INSERT INTO task_evidence(task_id, path, hash, symbol_id, line_start, line_end, excerpt)
+                    VALUES(?,?,?,?,?,?,?)
+                    """,
+                    (
+                        task_id,
+                        ev.path,
+                        ev.hash,
+                        ev.symbol,
+                        ev.line_start,
+                        ev.line_end,
+                        ev.excerpt,
+                    ),
+                )
+            conn.commit()
+            return task_id
 
     def capture(
         self,
@@ -372,41 +373,41 @@ class LocalEngine:
 
     def savings(self, since_days: int = 30) -> dict[str, Any]:
         since = datetime.now(timezone.utc) - timedelta(days=since_days)
-        conn = connect(self.db_path)
-        rows = conn.execute(
-            "SELECT * FROM memory_events WHERE created_at >= ? ORDER BY created_at DESC",
-            (since.isoformat(),),
-        ).fetchall()
-        resolve_rows = [row for row in rows if row["event_type"] == "resolve_task"]
-        capture_rows = [row for row in rows if row["event_type"] == "capture_task"]
-        task_counts: Counter[int] = Counter(
-            int(row["task_id"])
-            for row in resolve_rows
-            if row["status"] == Freshness.FRESH.value and row["task_id"] is not None
-        )
-        top_tasks = []
-        for task_id, hits in task_counts.most_common(5):
-            task = conn.execute("SELECT question FROM tasks WHERE id=?", (task_id,)).fetchone()
-            top_tasks.append(
-                {
-                    "task_id": task_id,
-                    "fresh_hits": hits,
-                    "question": task["question"] if task else "",
-                }
+        with closing(connect(self.db_path)) as conn:
+            rows = conn.execute(
+                "SELECT * FROM memory_events WHERE created_at >= ? ORDER BY created_at DESC",
+                (since.isoformat(),),
+            ).fetchall()
+            resolve_rows = [row for row in rows if row["event_type"] == "resolve_task"]
+            capture_rows = [row for row in rows if row["event_type"] == "capture_task"]
+            task_counts: Counter[int] = Counter(
+                int(row["task_id"])
+                for row in resolve_rows
+                if row["status"] == Freshness.FRESH.value and row["task_id"] is not None
             )
-        return {
-            "estimated": True,
-            "formula": "saved_tokens = raw_evidence_file_tokens - returned_packet_tokens",
-            "since_days": since_days,
-            "resolve_events": len(resolve_rows),
-            "fresh_hits": sum(1 for row in resolve_rows if row["status"] == Freshness.FRESH.value),
-            "new_contexts": sum(1 for row in resolve_rows if row["status"] == Freshness.NEW.value),
-            "stale_preventions": sum(int(row["stale_prevention"]) for row in resolve_rows),
-            "captures_saved": sum(1 for row in capture_rows if row["status"] == "saved"),
-            "skipped_captures": sum(1 for row in capture_rows if row["status"] == "skipped"),
-            "estimated_saved_tokens": sum(int(row["estimated_saved_tokens"]) for row in rows),
-            "top_repeated_tasks": top_tasks,
-        }
+            top_tasks = []
+            for task_id, hits in task_counts.most_common(5):
+                task = conn.execute("SELECT question FROM tasks WHERE id=?", (task_id,)).fetchone()
+                top_tasks.append(
+                    {
+                        "task_id": task_id,
+                        "fresh_hits": hits,
+                        "question": task["question"] if task else "",
+                    }
+                )
+            return {
+                "estimated": True,
+                "formula": "saved_tokens = raw_evidence_file_tokens - returned_packet_tokens",
+                "since_days": since_days,
+                "resolve_events": len(resolve_rows),
+                "fresh_hits": sum(1 for row in resolve_rows if row["status"] == Freshness.FRESH.value),
+                "new_contexts": sum(1 for row in resolve_rows if row["status"] == Freshness.NEW.value),
+                "stale_preventions": sum(int(row["stale_prevention"]) for row in resolve_rows),
+                "captures_saved": sum(1 for row in capture_rows if row["status"] == "saved"),
+                "skipped_captures": sum(1 for row in capture_rows if row["status"] == "skipped"),
+                "estimated_saved_tokens": sum(int(row["estimated_saved_tokens"]) for row in rows),
+                "top_repeated_tasks": top_tasks,
+            }
 
     def _record_event(
         self,
@@ -421,30 +422,30 @@ class LocalEngine:
         skipped_reason: str = "",
         data: dict[str, Any] | None = None,
     ) -> None:
-        conn = connect(self.db_path)
-        conn.execute(
-            """
-            INSERT INTO memory_events(
-                event_type, question, status, task_id, packet_tokens, baseline_tokens,
-                estimated_saved_tokens, stale_prevention, skipped_reason, data_json, created_at
+        with closing(connect(self.db_path)) as conn:
+            conn.execute(
+                """
+                INSERT INTO memory_events(
+                    event_type, question, status, task_id, packet_tokens, baseline_tokens,
+                    estimated_saved_tokens, stale_prevention, skipped_reason, data_json, created_at
+                )
+                VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    event_type,
+                    question,
+                    status,
+                    task_id,
+                    packet_tokens,
+                    baseline_tokens,
+                    estimated_saved_tokens,
+                    stale_prevention,
+                    skipped_reason,
+                    json.dumps(data or {}, sort_keys=True),
+                    _utc_now(),
+                ),
             )
-            VALUES(?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                event_type,
-                question,
-                status,
-                task_id,
-                packet_tokens,
-                baseline_tokens,
-                estimated_saved_tokens,
-                stale_prevention,
-                skipped_reason,
-                json.dumps(data or {}, sort_keys=True),
-                _utc_now(),
-            ),
-        )
-        conn.commit()
+            conn.commit()
 
     def recall(self, question: str, budget: int = 800) -> ContextPacket:
         match = self._best_task(question)
@@ -495,39 +496,39 @@ class LocalEngine:
         )
 
     def changed(self) -> list[TaskMemory]:
-        conn = connect(self.db_path)
-        tasks = []
-        for row in conn.execute("SELECT * FROM tasks ORDER BY updated_at DESC").fetchall():
-            task = self._task_from_row(row, score=1.0)
-            task.evidence = self._task_evidence(task.id)
-            if any(e.status != Freshness.FRESH for e in task.evidence):
-                tasks.append(task)
-        return tasks
+        with closing(connect(self.db_path)) as conn:
+            tasks = []
+            for row in conn.execute("SELECT * FROM tasks ORDER BY updated_at DESC").fetchall():
+                task = self._task_from_row(row, score=1.0)
+                task.evidence = self._task_evidence(task.id)
+                if any(e.status != Freshness.FRESH for e in task.evidence):
+                    tasks.append(task)
+            return tasks
 
     def stats(self) -> dict[str, int]:
-        conn = connect(self.db_path)
-        return {
-            "files": conn.execute("SELECT COUNT(*) FROM files").fetchone()[0],
-            "symbols": conn.execute("SELECT COUNT(*) FROM symbols").fetchone()[0],
-            "edges": conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0],
-            "tasks": conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0],
-        }
+        with closing(connect(self.db_path)) as conn:
+            return {
+                "files": conn.execute("SELECT COUNT(*) FROM files").fetchone()[0],
+                "symbols": conn.execute("SELECT COUNT(*) FROM symbols").fetchone()[0],
+                "edges": conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0],
+                "tasks": conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0],
+            }
 
     def last_indexed_at(self) -> str:
-        conn = connect(self.db_path)
-        row = conn.execute("SELECT MAX(indexed_at) AS last_indexed_at FROM files").fetchone()
-        return row["last_indexed_at"] or ""
+        with closing(connect(self.db_path)) as conn:
+            row = conn.execute("SELECT MAX(indexed_at) AS last_indexed_at FROM files").fetchone()
+            return row["last_indexed_at"] or ""
 
     def export_json(self) -> dict:
-        conn = connect(self.db_path)
-        return {
-            "root": str(self.root),
-            "stats": self.stats(),
-            "files": [dict(r) for r in conn.execute("SELECT * FROM files ORDER BY path").fetchall()],
-            "symbols": [dict(r) for r in conn.execute("SELECT * FROM symbols ORDER BY path,line").fetchall()],
-            "edges": [dict(r) for r in conn.execute("SELECT * FROM edges ORDER BY path,line").fetchall()],
-            "tasks": [dict(r) for r in conn.execute("SELECT * FROM tasks ORDER BY updated_at").fetchall()],
-        }
+        with closing(connect(self.db_path)) as conn:
+            return {
+                "root": str(self.root),
+                "stats": self.stats(),
+                "files": [dict(r) for r in conn.execute("SELECT * FROM files ORDER BY path").fetchall()],
+                "symbols": [dict(r) for r in conn.execute("SELECT * FROM symbols ORDER BY path,line").fetchall()],
+                "edges": [dict(r) for r in conn.execute("SELECT * FROM edges ORDER BY path,line").fetchall()],
+                "tasks": [dict(r) for r in conn.execute("SELECT * FROM tasks ORDER BY updated_at").fetchall()],
+            }
 
     def _iter_files(self) -> Iterable[Path]:
         patterns = load_ignore_patterns(self.root)
@@ -615,19 +616,19 @@ class LocalEngine:
         return None
 
     def _best_task(self, question: str) -> TaskMemory | None:
-        conn = connect(self.db_path)
-        q_terms = self._term_set(question)
-        rows = conn.execute("SELECT * FROM tasks ORDER BY updated_at DESC").fetchall()
-        best: TaskMemory | None = None
-        for row in rows:
-            score = similarity(q_terms, self._term_set(row["normalized_intent"]))
-            raw_question = row["question"].lower()
-            if question.lower().strip() in raw_question or raw_question in question.lower().strip():
-                score += 0.25
-            task = self._task_from_row(row, score=min(score, 1.0))
-            if best is None or task.score > best.score:
-                best = task
-        return best
+        with closing(connect(self.db_path)) as conn:
+            q_terms = self._term_set(question)
+            rows = conn.execute("SELECT * FROM tasks ORDER BY updated_at DESC").fetchall()
+            best: TaskMemory | None = None
+            for row in rows:
+                score = similarity(q_terms, self._term_set(row["normalized_intent"]))
+                raw_question = row["question"].lower()
+                if question.lower().strip() in raw_question or raw_question in question.lower().strip():
+                    score += 0.25
+                task = self._task_from_row(row, score=min(score, 1.0))
+                if best is None or task.score > best.score:
+                    best = task
+            return best
 
     def _task_from_row(self, row, score: float) -> TaskMemory:
         return TaskMemory(
@@ -642,34 +643,34 @@ class LocalEngine:
         )
 
     def _task_evidence(self, task_id: int) -> list[Evidence]:
-        conn = connect(self.db_path)
-        evidence: list[Evidence] = []
-        for row in conn.execute(
-            "SELECT * FROM task_evidence WHERE task_id=? ORDER BY id",
-            (task_id,),
-        ).fetchall():
-            path = row["path"]
-            full = self.root / path
-            stored_hash = row["hash"]
-            if not full.exists():
-                status = Freshness.MISSING
-                current = None
-            else:
-                current = file_hash(full)
-                status = Freshness.FRESH if current == stored_hash else Freshness.STALE
-            evidence.append(
-                Evidence(
-                    path=path,
-                    hash=stored_hash,
-                    current_hash=current,
-                    status=status,
-                    symbol=row["symbol_id"],
-                    line_start=row["line_start"],
-                    line_end=row["line_end"],
-                    excerpt=row["excerpt"],
+        with closing(connect(self.db_path)) as conn:
+            evidence: list[Evidence] = []
+            for row in conn.execute(
+                "SELECT * FROM task_evidence WHERE task_id=? ORDER BY id",
+                (task_id,),
+            ).fetchall():
+                path = row["path"]
+                full = self.root / path
+                stored_hash = row["hash"]
+                if not full.exists():
+                    status = Freshness.MISSING
+                    current = None
+                else:
+                    current = file_hash(full)
+                    status = Freshness.FRESH if current == stored_hash else Freshness.STALE
+                evidence.append(
+                    Evidence(
+                        path=path,
+                        hash=stored_hash,
+                        current_hash=current,
+                        status=status,
+                        symbol=row["symbol_id"],
+                        line_start=row["line_start"],
+                        line_end=row["line_end"],
+                        excerpt=row["excerpt"],
+                    )
                 )
-            )
-        return evidence
+            return evidence
 
     def _fresh_context(self, task: TaskMemory, budget: int) -> str:
         lines = [
@@ -710,46 +711,50 @@ class LocalEngine:
         return trim_to_budget("\n".join(lines), budget)
 
     def _graph_context(self, question: str, budget: int) -> tuple[str, list[Evidence]]:
-        conn = connect(self.db_path)
-        terms = self._term_set(question)
-        rows = conn.execute("SELECT * FROM symbols ORDER BY path,line").fetchall()
-        edge_terms = self._edge_terms_by_path(conn)
-        changed_files = self._recent_changed_files()
-        scored_by_path: dict[str, tuple[float, dict]] = {}
-        for row in rows:
-            text = f"{row['path']} {row['name']} {row['signature']} {edge_terms.get(row['path'], '')}"
-            score = similarity(terms, self._term_set(text))
-            if row["path"] in changed_files:
-                score += 0.08
-            if score > 0:
-                existing = scored_by_path.get(row["path"])
-                if (
-                    existing is None
-                    or score > existing[0]
-                    or (existing[1]["kind"] == "file" and row["kind"] != "file")
-                ):
-                    scored_by_path[row["path"]] = (score, dict(row))
-        scored = sorted(scored_by_path.values(), key=lambda x: x[0], reverse=True)
-        top = scored[:12]
-        lines = ["MEMOGRAPHIX_REPO_CONTEXT", "status: no_prior_task", "", "relevant_symbols:"]
-        evidence: list[Evidence] = []
-        for score, row in top:
-            lines.append(
-                f"- {row['kind']} {row['name']} in {row['path']}:{row['line']} score={score:.3f}"
-            )
-            evidence.append(
-                Evidence(
-                    path=row["path"],
-                    hash=self._file_hash_for_path(row["path"]),
-                    status=Freshness.FRESH,
-                    symbol=row["id"],
-                    line_start=row["line"],
-                    excerpt=row["signature"],
+        with closing(connect(self.db_path)) as conn:
+            terms = self._term_set(question)
+            rows = conn.execute("SELECT * FROM symbols ORDER BY path,line").fetchall()
+            edge_terms = self._edge_terms_by_path(conn)
+            changed_files = self._recent_changed_files()
+            file_hashes = {
+                row["path"]: row["hash"]
+                for row in conn.execute("SELECT path, hash FROM files").fetchall()
+            }
+            scored_by_path: dict[str, tuple[float, dict]] = {}
+            for row in rows:
+                text = f"{row['path']} {row['name']} {row['signature']} {edge_terms.get(row['path'], '')}"
+                score = similarity(terms, self._term_set(text))
+                if row["path"] in changed_files:
+                    score += 0.08
+                if score > 0:
+                    existing = scored_by_path.get(row["path"])
+                    if (
+                        existing is None
+                        or score > existing[0]
+                        or (existing[1]["kind"] == "file" and row["kind"] != "file")
+                    ):
+                        scored_by_path[row["path"]] = (score, dict(row))
+            scored = sorted(scored_by_path.values(), key=lambda x: x[0], reverse=True)
+            top = scored[:12]
+            lines = ["MEMOGRAPHIX_REPO_CONTEXT", "status: no_prior_task", "", "relevant_symbols:"]
+            evidence: list[Evidence] = []
+            for score, row in top:
+                lines.append(
+                    f"- {row['kind']} {row['name']} in {row['path']}:{row['line']} score={score:.3f}"
                 )
-            )
-        if not top:
-            lines.append("- no direct symbol match; index may need richer language support")
-        return trim_to_budget("\n".join(lines), budget), evidence
+                evidence.append(
+                    Evidence(
+                        path=row["path"],
+                        hash=file_hashes.get(row["path"]),
+                        status=Freshness.FRESH,
+                        symbol=row["id"],
+                        line_start=row["line"],
+                        excerpt=row["signature"],
+                    )
+                )
+            if not top:
+                lines.append("- no direct symbol match; index may need richer language support")
+            return trim_to_budget("\n".join(lines), budget), evidence
 
     def _edge_terms_by_path(self, conn) -> dict[str, str]:
         terms: dict[str, list[str]] = {}
@@ -774,9 +779,9 @@ class LocalEngine:
         return {line.strip() for line in proc.stdout.splitlines() if line.strip()}
 
     def _file_hash_for_path(self, rel: str) -> str | None:
-        conn = connect(self.db_path)
-        row = conn.execute("SELECT hash FROM files WHERE path=?", (rel,)).fetchone()
-        return row["hash"] if row else None
+        with closing(connect(self.db_path)) as conn:
+            row = conn.execute("SELECT hash FROM files WHERE path=?", (rel,)).fetchone()
+            return row["hash"] if row else None
 
     def _infer_evidence(self, question: str, limit: int) -> list[str]:
         _context, evidence = self._graph_context(question, 1200)
