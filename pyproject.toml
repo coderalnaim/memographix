@@ -1,0 +1,81 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "memographix"
+version = "0.1.0"
+description = "Local AI agent memory layer for repeated developer tasks, fresh context packets, and low-token repo recall."
+readme = "README.md"
+requires-python = ">=3.10,<3.14"
+license = { file = "LICENSE" }
+authors = [{ name = "Memographix Contributors" }]
+keywords = [
+  "ai-agent",
+  "mcp",
+  "codebase-memory",
+  "knowledge-graph",
+  "developer-tools",
+  "rag",
+  "context-engineering",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Rust",
+  "Topic :: Software Development",
+]
+dependencies = []
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.0"]
+dev = ["build>=1.2", "pytest>=8.0", "ruff>=0.9", "mypy>=1.10", "twine>=5.0"]
+
+[project.urls]
+Homepage = "https://github.com/coderalnaim/memographix"
+Repository = "https://github.com/coderalnaim/memographix"
+Issues = "https://github.com/coderalnaim/memographix/issues"
+
+[project.scripts]
+mgx = "memographix.cli:main"
+memographix = "memographix.cli:main"
+
+[tool.maturin]
+manifest-path = "crates/memographix-core/Cargo.toml"
+python-source = "python"
+module-name = "memographix._native"
+features = ["extension-module", "abi3-py310"]
+exclude = [
+  "benchmarks/**",
+  "benchmark_results/**",
+  ".mgx-local/**",
+  ".github/**",
+  ".pytest_cache/**",
+  ".ruff_cache/**",
+  ".mypy_cache/**",
+  ".venv*/**",
+  "docs/**",
+  "scripts/**",
+  "tests/**",
+  "BENCHMARKS.md",
+  "SECURITY.md",
+  ".dockerignore",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["python"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

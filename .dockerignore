@@ -1,0 +1,16 @@
+.git
+.venv
+.venv*
+.mgx-local
+.pytest_cache
+.ruff_cache
+.mypy_cache
+__pycache__
+*.pyc
+benchmark_results
+benchmarks/results/*
+!benchmarks/results/.gitignore
+dist
+target
+node_modules
+.memographix

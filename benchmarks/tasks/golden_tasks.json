@@ -1,0 +1,101 @@
+[
+  {
+    "id": "kubelet-pod-lifecycle",
+    "question": "Trace how kubelet handles pod lifecycle sync and where pod worker state is managed.",
+    "seed_answer": "Kubelet pod lifecycle sync is coordinated through kubelet sync paths and pod worker state. Inspect kubelet pod worker and lifecycle-related code before changing behavior.",
+    "expected_evidence": [
+      "pkg/kubelet",
+      "pkg/kubelet/pod_workers.go",
+      "pkg/kubelet/kubelet.go"
+    ],
+    "required_concepts": [
+      "kubelet",
+      "pod worker",
+      "sync pod",
+      "pod lifecycle"
+    ],
+    "forbidden_hallucinations": [
+      "single global pod lock",
+      "external cloud scheduler owns kubelet pod state"
+    ]
+  },
+  {
+    "id": "scheduler-plugin-selection",
+    "question": "Explain how Kubernetes scheduler plugins are selected and invoked during scheduling.",
+    "seed_answer": "Scheduler plugin behavior is driven by scheduler framework configuration and plugin extension points. Inspect scheduler framework and plugin code before changing scheduling behavior.",
+    "expected_evidence": [
+      "pkg/scheduler",
+      "pkg/scheduler/framework",
+      "pkg/scheduler/apis/config"
+    ],
+    "required_concepts": [
+      "scheduler framework",
+      "plugin",
+      "extension point",
+      "profile"
+    ],
+    "forbidden_hallucinations": [
+      "plugins are selected by an LLM",
+      "scheduler plugins require a remote API"
+    ]
+  },
+  {
+    "id": "apiserver-authorization-flow",
+    "question": "How does the apiserver authorization flow evaluate a request?",
+    "seed_answer": "Apiserver authorization flows through authorization interfaces, request attributes, and authorizer implementations. Inspect staging apiserver authorization packages before changing access checks.",
+    "expected_evidence": [
+      "staging/src/k8s.io/apiserver/pkg/authorization",
+      "staging/src/k8s.io/apiserver/pkg/endpoints/filters"
+    ],
+    "required_concepts": [
+      "authorizer",
+      "attributes",
+      "request",
+      "authorization"
+    ],
+    "forbidden_hallucinations": [
+      "authorization is only checked in kubelet",
+      "every request bypasses authorizers"
+    ]
+  },
+  {
+    "id": "crd-schema-validation",
+    "question": "Where is CRD schema validation handled for custom resources?",
+    "seed_answer": "CRD schema validation is handled in apiextensions apiserver validation and schema packages. Inspect validation, schema, and custom resource strategy code before changing behavior.",
+    "expected_evidence": [
+      "staging/src/k8s.io/apiextensions-apiserver",
+      "staging/src/k8s.io/apiextensions-apiserver/pkg/apiserver/schema",
+      "staging/src/k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/validation"
+    ],
+    "required_concepts": [
+      "custom resource",
+      "schema",
+      "validation",
+      "openapi"
+    ],
+    "forbidden_hallucinations": [
+      "CRD schemas are validated only by kubectl",
+      "custom resources skip schema validation"
+    ]
+  },
+  {
+    "id": "controller-reconcile-ownership",
+    "question": "How do Kubernetes controllers decide ownership and reconcile desired state?",
+    "seed_answer": "Controller ownership and reconciliation are spread across controller packages, owner reference handling, and workqueue-driven sync loops. Inspect pkg/controller before changing ownership behavior.",
+    "expected_evidence": [
+      "pkg/controller",
+      "pkg/controller/controller_ref_manager.go",
+      "pkg/controller/deployment"
+    ],
+    "required_concepts": [
+      "owner reference",
+      "controller",
+      "reconcile",
+      "workqueue"
+    ],
+    "forbidden_hallucinations": [
+      "controllers reconcile through a central SQL table",
+      "owner references are ignored by controllers"
+    ]
+  }
+]

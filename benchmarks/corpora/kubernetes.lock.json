@@ -1,0 +1,8 @@
+{
+  "name": "kubernetes",
+  "repo": "https://github.com/kubernetes/kubernetes.git",
+  "commit": "75d51c440770f96b9725efea4145ba50fc6aef4b",
+  "path": ".mgx-local/corpora/kubernetes",
+  "checked_at": "2026-04-27",
+  "reason": "Large public Go monorepo used as the primary reproducible Memographix benchmark corpus."
+}

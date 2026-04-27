@@ -1,0 +1,22 @@
+services:
+  benchmark:
+    build:
+      context: ../..
+      dockerfile: benchmarks/docker/Dockerfile
+    image: memographix-benchmark:local
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      CARGO_TARGET_DIR: /tmp/mgx-target
+    volumes:
+      - ../..:/work:ro
+      - ../../.mgx-local/benchmark-results:/results
+      - ${MGX_CORPUS:-../../.mgx-local/corpora/kubernetes}:/corpus:ro
+    command:
+      - bash
+      - -lc
+      - >
+        python -m pip install -q . &&
+        PYTHONPATH= python benchmarks/run.py
+        --corpus /corpus
+        --out /results
+        --tools memographix,naive,grep
