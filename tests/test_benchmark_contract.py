@@ -135,7 +135,7 @@ def test_comparison_ignores_missing_external_metrics(tmp_path: Path) -> None:
             {
                 "tool": "memographix",
                 "status": "ok",
-                "version": "0.1.0",
+                "version": "0.1.1",
                 "install_command": "pip install memographix",
                 "metrics": {
                     "first_index_ms": 10,

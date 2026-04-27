@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 import tarfile
@@ -93,7 +94,7 @@ def _install_smoke(dist: Path) -> None:
                 "--no-index",
                 "--find-links",
                 str(dist.resolve()),
-                "memographix==0.1.0",
+                f"memographix=={_project_version()}",
             ],
             check=True,
         )
@@ -123,6 +124,18 @@ def _install_smoke(dist: Path) -> None:
         )
         subprocess.run([str(mgx), "--root", str(repo), "savings", "--json"], check=True)
         subprocess.run([str(python), "-c", "import memographix"], check=True)
+
+
+def _project_version() -> str:
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    match = re.search(
+        r'^version\s*=\s*"([^"]+)"',
+        pyproject.read_text(encoding="utf-8"),
+        flags=re.MULTILINE,
+    )
+    if not match:
+        raise RuntimeError("could not find project version in pyproject.toml")
+    return match.group(1)
 
 
 if __name__ == "__main__":

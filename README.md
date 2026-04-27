@@ -14,13 +14,20 @@ retrieves fresh context before work and captures useful task memory after work.
 ## Quick Start
 
 ```bash
-pip install "memographix[mcp]"
+pip install memographix
 mgx setup
 mgx savings
 ```
 
 That creates local state in `.memographix/`, indexes the repo, writes an MCP
 server config, and installs project agent rules.
+
+For MCP clients that need the Python MCP server package, install the optional
+extra instead:
+
+```bash
+pip install "memographix[mcp]"
+```
 
 ## Daily Use
 
