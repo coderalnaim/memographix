@@ -143,6 +143,31 @@ def test_setup_writes_supported_mcp_integrations(tmp_path: Path, monkeypatch) ->
         assert "Memographix: saved task memory" in text
 
 
+def test_setup_replaces_old_memographix_agent_rules(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("MEMOGRAPHIX_CODEX_CONFIG", str(tmp_path / "codex-config.toml"))
+    (tmp_path / "service.py").write_text("def handle():\n    return True\n", encoding="utf-8")
+    (tmp_path / "AGENTS.md").write_text(
+        "# Project Notes\n\nKeep this.\n\n"
+        "# Memographix\n\n"
+        "This project can use Memographix local task memory in `.memographix/`.\n"
+        "- Before answering, call the `resolve_task` MCP tool with the user's task.\n\n"
+        "# Existing Section\n\n"
+        "Keep this too.\n",
+        encoding="utf-8",
+    )
+
+    Workspace.open(tmp_path).setup(agents="codex")
+
+    text = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
+    assert "This project can use Memographix local task memory" not in text
+    assert "This project uses strict Memographix local task memory" in text
+    assert "Before reading files" in text
+    assert "Memographix: saved task memory" in text
+    assert "# Project Notes" in text
+    assert "# Existing Section" in text
+    assert "Keep this too." in text
+
+
 def test_repair_mcp_flags_duplicate_memographix_servers(
     tmp_path: Path,
     capsys,

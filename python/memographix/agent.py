@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 SUPPORTED_AGENTS = (
@@ -44,6 +45,8 @@ Rules:
 - Never treat stale memory as authoritative.
 """
 
+MEMOGRAPHIX_HEADING_RE = re.compile(r"(?m)^# Memographix\s*$")
+
 
 def install_agent_rules(root: Path, agent: str) -> Path:
     agent = agent.lower()
@@ -68,6 +71,17 @@ def install_agent_rules(root: Path, agent: str) -> Path:
         raise ValueError(f"unknown agent: {agent}")
 
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
-    if "This project can use Memographix local task memory" not in existing:
-        path.write_text((existing.rstrip() + "\n\n" + AGENT_RULES).lstrip(), encoding="utf-8")
+    path.write_text(_merge_agent_rules(existing), encoding="utf-8")
     return path
+
+
+def _merge_agent_rules(existing: str) -> str:
+    match = MEMOGRAPHIX_HEADING_RE.search(existing)
+    if not match:
+        return (existing.rstrip() + "\n\n" + AGENT_RULES).lstrip()
+    next_heading = re.search(r"(?m)^# (?!Memographix\s*$).+$", existing[match.end() :])
+    end = match.end() + next_heading.start() if next_heading else len(existing)
+    merged = existing[: match.start()].rstrip() + "\n\n" + AGENT_RULES
+    if existing[end:].strip():
+        merged += "\n\n" + existing[end:].lstrip()
+    return merged.lstrip()
