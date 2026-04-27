@@ -50,6 +50,8 @@ def test_cli_setup_doctor_and_savings(tmp_path: Path, capsys, monkeypatch) -> No
     assert setup["status"]["setup_agents"] == ["codex"]
     assert any(item["agent"] == "codex" for item in setup["integrations"])
     assert setup["codex_mcp"]["registered"] is True
+    assert setup["codex_mcp"]["skill_installed"] is True
+    assert Path(setup["codex_mcp"]["skill_path"]).exists()
     assert (tmp_path / ".memographix" / "config.toml").exists()
     assert (tmp_path / ".memographix" / "mcp.json").exists()
     assert (tmp_path / "AGENTS.md").exists()
@@ -57,6 +59,10 @@ def test_cli_setup_doctor_and_savings(tmp_path: Path, capsys, monkeypatch) -> No
     codex_config_text = codex_config.read_text(encoding="utf-8")
     assert "[mcp_servers.memographix]" in codex_config_text
     assert '"serve"' in codex_config_text
+    codex_skill = tmp_path / "codex-skills" / "memographix" / "SKILL.md"
+    assert codex_skill.exists()
+    assert "description: >" in codex_skill.read_text(encoding="utf-8")
+    assert "capture_task" in codex_skill.read_text(encoding="utf-8")
 
     main(["--root", str(tmp_path), "doctor", "--live", "--json"])
     doctor = json.loads(capsys.readouterr().out)
@@ -105,6 +111,7 @@ def test_setup_writes_supported_mcp_integrations(tmp_path: Path, monkeypatch) ->
 
     integrations = {item["agent"]: item for item in result["integrations"]}
     assert integrations["codex"]["ready"] is True
+    assert integrations["codex"]["skill_installed"] is True
     assert integrations["claude"]["ready"] is True
     assert integrations["cursor"]["ready"] is True
     assert integrations["copilot"]["ready"] is True
@@ -166,6 +173,11 @@ def test_setup_replaces_old_memographix_agent_rules(tmp_path: Path, monkeypatch)
     assert "# Project Notes" in text
     assert "# Existing Section" in text
     assert "Keep this too." in text
+    skill = tmp_path / "codex-skills" / "memographix" / "SKILL.md"
+    assert skill.exists()
+    assert "Use this skill for repo-specific development work" in skill.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_repair_mcp_flags_duplicate_memographix_servers(

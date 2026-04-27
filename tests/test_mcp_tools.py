@@ -99,6 +99,30 @@ def test_global_router_resolves_registered_repo_by_alias(tmp_path: Path) -> None
     assert packet["repo_root"] == str(repo)
 
 
+def test_explicit_unconfigured_repo_path_does_not_fall_back_to_registered_repo(
+    tmp_path: Path,
+) -> None:
+    registered = tmp_path / "registered-repo"
+    registered.mkdir()
+    (registered / "main.py").write_text("def main():\n    return True\n", encoding="utf-8")
+    Workspace.open(registered).setup(agents="codex")
+
+    unconfigured = tmp_path / "unconfigured-repo"
+    unconfigured.mkdir()
+    (unconfigured / "README.md").write_text("# Demo\n", encoding="utf-8")
+
+    packet = tool_resolve_task(
+        str(tmp_path),
+        "Explain this repo.",
+        300,
+        repo=str(unconfigured),
+    )
+
+    assert packet["status"] == "disabled"
+    assert packet["reason"] == "repo not configured"
+    assert packet["repo_root"] == ""
+
+
 def test_mcp_automatic_resolve_requires_setup(tmp_path: Path) -> None:
     (tmp_path / "module.py").write_text("def run():\n    return True\n", encoding="utf-8")
     packet = tool_resolve_task(str(tmp_path), "How does run work?", 300)

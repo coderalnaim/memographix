@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .agent import SUPPORTED_AGENTS
+from .agent import SUPPORTED_AGENTS, codex_skill_installed, codex_skill_path, install_codex_skill
 
 
 def install_mcp_integrations(root: Path, agents: list[str]) -> list[dict[str, Any]]:
@@ -160,6 +160,7 @@ def _write_codex_config(root: Path) -> dict[str, Any]:
     path.parent.mkdir(parents=True, exist_ok=True)
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
     server_name = mcp_server_name(root)
+    skill_path = install_codex_skill()
     header = f"[mcp_servers.{server_name}]"
     block = "\n".join(
         [
@@ -175,9 +176,12 @@ def _write_codex_config(root: Path) -> dict[str, Any]:
         updated = True
     else:
         updated = False
-    return _integration_result(
+    result = _integration_result(
         root, "codex", mode="mcp", path=path, registered=True, updated=updated
     )
+    result["skill_path"] = str(skill_path)
+    result["skill_installed"] = True
+    return result
 
 
 def _codex_status(root: Path) -> dict[str, Any]:
@@ -185,9 +189,15 @@ def _codex_status(root: Path) -> dict[str, Any]:
     registered = path.exists() and f"[mcp_servers.{mcp_server_name(root)}]" in path.read_text(
         encoding="utf-8"
     )
-    return _integration_result(
+    result = _integration_result(
         root, "codex", mode="mcp", path=path, registered=registered, updated=False
     )
+    result["skill_path"] = str(codex_skill_path())
+    result["skill_installed"] = codex_skill_installed()
+    result["ready"] = registered and result["skill_installed"]
+    if registered and not result["skill_installed"]:
+        result["reason"] = "Codex MCP is configured but the Memographix skill is missing"
+    return result
 
 
 def _json_status(root: Path, agent: str, path: Path, section: str) -> dict[str, Any]:

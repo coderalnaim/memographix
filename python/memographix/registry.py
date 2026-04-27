@@ -66,6 +66,10 @@ def resolve_repo(
         path_match = _resolve_path_query(query)
         if path_match:
             return RepoResolution(ok=True, root=path_match, matched_by="path")
+        if _looks_like_path_query(query):
+            candidate = Path(query).expanduser()
+            reason = "repo path not found" if not candidate.exists() else "repo not configured"
+            return RepoResolution(ok=False, reason=reason, candidates=[])
 
     repos = list_registered_repos()
     if query:
@@ -142,6 +146,15 @@ def _resolve_path_query(query: str) -> Path | None:
     if candidate.is_file():
         candidate = candidate.parent
     return _configured_ancestor(candidate.resolve())
+
+
+def _looks_like_path_query(query: str) -> bool:
+    return (
+        query.startswith(("/", "~", "."))
+        or "/" in query
+        or "\\" in query
+        or re.match(r"^[A-Za-z]:[\\/]", query) is not None
+    )
 
 
 def _configured_ancestor(path: Path) -> Path | None:

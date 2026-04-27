@@ -23,7 +23,10 @@ mgx verify-agent
 Setup writes `.memographix/mcp.json`, configures supported MCP clients, and
 registers the repo for global routing. It also installs project rules for
 Codex, Claude, Cursor, Copilot, Gemini, OpenCode, Aider, and Windsurf-style
-agents. Restart already-open agents after setup so they reload MCP tools.
+agents. For Codex, setup also installs a global `memographix` Codex skill under
+`~/.codex/skills/` so new chats are told to check Memographix before any
+repo-specific work. Restart already-open agents after setup so they reload MCP
+tools and skills.
 `mgx doctor --live` verifies the local server and routing. `mgx verify-agent`
 verifies that the active agent actually calls Memographix.
 The old `pip install "memographix[mcp]"` form remains accepted for backward
@@ -36,7 +39,7 @@ configuration file:
 
 | Agent | Config written by setup |
 | --- | --- |
-| Codex | `~/.codex/config.toml` |
+| Codex | `~/.codex/config.toml` plus `~/.codex/skills/memographix/SKILL.md` |
 | Claude Code | `.mcp.json` |
 | Cursor | `.cursor/mcp.json` |
 | GitHub Copilot in VS Code | `.vscode/mcp.json` |

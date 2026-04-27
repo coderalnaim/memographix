@@ -22,7 +22,8 @@ mgx savings
 includes the CLI, local indexer, MCP server, and agent integration support.
 `mgx setup` creates `.memographix/`, indexes the repo, writes MCP config for
 supported agents, registers the repo for global MCP routing, and installs
-project agent rules.
+project agent rules. For Codex it also installs a small global Codex skill so
+new chats know to check Memographix before repo work.
 
 If you are already inside a virtual environment or CI job, this also works:
 
@@ -50,7 +51,8 @@ available, and the router can resolve this repo. It does not prove your active
 agent has actually called Memographix yet. `mgx verify-agent` gives you a short
 prompt to paste into the agent and passes only after that agent performs a real
 `resolve_task` and `capture_task`. Restart agents after setup if they were
-already open.
+already open. This restart matters because Codex and other agents load MCP
+tools/rules at chat startup.
 
 Control it per repo:
 

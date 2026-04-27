@@ -132,11 +132,13 @@ def main(argv: list[str] | None = None) -> None:
             for item in result["integrations"]:
                 status = "ready" if item["ready"] else "needs review"
                 detail = f" ({item['reason']})" if item["reason"] else ""
-                print(f"- {item['agent']}: {status} via {item['path']}{detail}")
+                skill = f"; skill {item['skill_path']}" if item.get("skill_path") else ""
+                print(f"- {item['agent']}: {status} via {item['path']}{skill}{detail}")
             print("Agent rules installed:")
             for item in result["agents"]:
                 print(f"- {item['agent']}: {item['path']}")
             print("Use your AI agent normally; it can resolve and capture Memographix memory.")
+            print("Restart already-open agents so they reload MCP tools and Codex skills.")
     elif args.cmd == "enable":
         result = ws.enable(reindex=args.reindex)
         if args.json:
@@ -266,7 +268,8 @@ def main(argv: list[str] | None = None) -> None:
             for item in result["integrations"]:
                 status = "ready" if item["ready"] else "needs review"
                 detail = f" ({item['reason']})" if item["reason"] else ""
-                print(f"- {item['agent']}: {status} via {item['path']}{detail}")
+                skill = f"; skill {item['skill_path']}" if item.get("skill_path") else ""
+                print(f"- {item['agent']}: {status} via {item['path']}{skill}{detail}")
             missing = [a["agent"] for a in result["agents"] if not a["rules_installed"]]
             if missing:
                 print(f"agent_rules_missing: {', '.join(missing)}")
