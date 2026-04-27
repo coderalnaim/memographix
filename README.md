@@ -1,10 +1,5 @@
 # Memographix
 
-[![CI](https://github.com/coderalnaim/memographix/actions/workflows/ci.yml/badge.svg)](https://github.com/coderalnaim/memographix/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/memographix.svg)](https://pypi.org/project/memographix/)
-[![Python](https://img.shields.io/pypi/pyversions/memographix.svg)](https://pypi.org/project/memographix/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-
 Memographix gives AI coding agents local memory for your repo.
 
 Install it once, run setup once, and keep using Codex, Claude, Cursor, Copilot,
@@ -32,8 +27,8 @@ If you are already inside a virtual environment or CI job, this also works:
 python -m pip install memographix
 ```
 
-The PyPI badge above always shows the latest published version; install commands
-stay versionless.
+PyPI resolves the latest release automatically, so install commands stay
+versionless.
 
 ## Daily Use
 

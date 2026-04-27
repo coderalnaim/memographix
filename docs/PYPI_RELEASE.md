@@ -58,4 +58,6 @@ because Homebrew-managed Python blocks global pip installs through PEP 668.
 
 The README is packaged from the root `README.md` through `pyproject.toml`.
 PyPI snapshots that README at publish time. Keep install instructions versionless
-and rely on the live PyPI badge for the current published version.
+so the published project page does not need a README edit for every release.
+Avoid badge image rows in the packaged README because PyPI can surface image alt
+text as plain text when external badge images do not render.
