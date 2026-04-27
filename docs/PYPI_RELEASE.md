@@ -52,6 +52,10 @@ python -m venv /tmp/mgx-check
 Runtime install must not require Docker, Node, Graphify, GraphRAG, or competitor
 benchmark tools.
 
+For user-facing CLI docs, prefer `pipx install memographix`. Keep
+`python -m pip install memographix` documented for virtual environments and CI
+because Homebrew-managed Python blocks global pip installs through PEP 668.
+
 The README is packaged from the root `README.md` through `pyproject.toml`.
 PyPI snapshots that README at publish time. Keep install instructions versionless
 and rely on the live PyPI badge for the current published version.

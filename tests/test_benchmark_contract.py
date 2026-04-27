@@ -92,7 +92,8 @@ def test_readme_stays_simple() -> None:
     assert "docker" not in readme.lower()
     quickstart = readme.split("## Quick Start", 1)[1].split("##", 1)[0]
     assert 'pip install "memographix[mcp]"' not in readme
-    assert "pip install memographix" in quickstart
+    assert "pipx install memographix" in quickstart
+    assert "python -m pip install memographix" in quickstart
     assert "mgx remember" not in quickstart
     assert "mgx setup" in quickstart
     assert "mgx savings" in quickstart
@@ -145,7 +146,7 @@ def test_comparison_ignores_missing_external_metrics(tmp_path: Path) -> None:
             {
                 "tool": "memographix",
                 "status": "ok",
-                "version": "0.1.2",
+                "version": "0.1.3",
                 "install_command": "pip install memographix",
                 "metrics": {
                     "first_index_ms": 10,

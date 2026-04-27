@@ -1,9 +1,15 @@
 # Agent Integrations
 
-Memographix is MCP-first. The standard PyPI install includes the MCP runtime:
+Memographix is MCP-first. Install the CLI once with pipx:
 
 ```bash
-pip install memographix
+pipx install memographix
+```
+
+If you are already inside a virtual environment or CI job, use pip instead:
+
+```bash
+python -m pip install memographix
 ```
 
 Run setup once per repo:

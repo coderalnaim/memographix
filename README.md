@@ -16,18 +16,24 @@ retrieves fresh context before work and captures useful task memory after work.
 Run this inside the repo where you want AI-agent memory:
 
 ```bash
-pip install memographix
+pipx install memographix
 mgx setup
 mgx savings
 ```
 
-The normal PyPI install includes the CLI, local indexer, MCP server, and agent
-integration support. `mgx setup` creates local state in `.memographix/`, indexes
-the repo, writes an MCP server config, and installs project agent rules.
+`pipx` avoids system Python conflicts on macOS and Linux. The PyPI package
+includes the CLI, local indexer, MCP server, and agent integration support.
+`mgx setup` creates `.memographix/`, indexes the repo, writes an MCP server
+config, and installs project agent rules.
 
-The PyPI badge above always shows the latest published version. The README does
-not hard-code a version number, so release updates do not require rewriting the
-install command.
+If you are already inside a virtual environment or CI job, this also works:
+
+```bash
+python -m pip install memographix
+```
+
+The PyPI badge above always shows the latest published version; install commands
+stay versionless.
 
 ## Daily Use
 
